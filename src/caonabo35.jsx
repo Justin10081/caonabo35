@@ -34,7 +34,7 @@ const C = {
 };
 
 // ─── ADMIN PASSWORD (change this to your real password) ───────────────
-const ADMIN_PASSWORD = "caonabo35admin";
+const ADMIN_PASSWORD = "LUIS3388";
 
 const ROOMS_INIT = [
   {id:1,name:"Suite Caonabo",nameEn:"Caonabo Suite",beds:"King",guests:2,price:120,size:"45m²",available:true,photo:I.bathroom,amenities:["AC","Smart TV","Minibar","Rain Shower"],desc:"Nuestra habitación insignia con baño de mármol travertino y ducha tipo lluvia."},
