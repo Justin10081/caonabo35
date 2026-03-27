@@ -1,6 +1,18 @@
 -- ─── Caonabo 35 · Supabase Schema ───────────────────────────────────────────
 -- Run this in: Supabase Dashboard → SQL Editor → New Query → Run
 
+-- ROOMS TABLE (persists price overrides, discounts, availability)
+create table if not exists rooms (
+  id             int primary key,
+  price_override numeric,
+  discount       int default 0,
+  available      boolean default true
+);
+insert into rooms (id) values (1),(2),(3),(4),(5),(6),(7) on conflict do nothing;
+alter table rooms enable row level security;
+create policy "Public can read rooms"          on rooms for select using (true);
+create policy "Authenticated can update rooms" on rooms for all    using (auth.role() = 'authenticated');
+
 -- BOOKINGS TABLE
 create table if not exists bookings (
   id          bigserial primary key,
@@ -17,6 +29,8 @@ create table if not exists bookings (
   paid        boolean default false,
   source      text default 'Direct',
   notes       text,
+  id_type     text,
+  id_number   text,
   created_at  timestamptz default now()
 );
 
