@@ -37,13 +37,13 @@ const C = {
 const ADMIN_PASSWORD = "LUIS3388";
 
 const ROOMS_INIT = [
-  {id:1,name:"Suite Caonabo",nameEn:"Caonabo Suite",beds:"King",guests:2,price:120,size:"45m²",available:true,photo:I.bathroom,amenities:["AC","Smart TV","Minibar","Rain Shower"],desc:"Nuestra habitación insignia con baño de mármol travertino y ducha tipo lluvia."},
-  {id:2,name:"Habitación Jardín",nameEn:"Garden Room",beds:"Queen",guests:2,price:95,size:"32m²",available:true,photo:I.chessRoom,amenities:["AC","Smart TV","Rain Shower"],desc:"Tranquila y luminosa con vistas al jardín interior tropical."},
-  {id:3,name:"Suite Terraza",nameEn:"Terrace Suite",beds:"King",guests:3,price:150,size:"55m²",available:false,photo:I.terrace,amenities:["AC","Smart TV","Minibar","Terraza Privada","Rain Shower"],desc:"Acceso exclusivo a la terraza exterior con iluminación ambiental."},
-  {id:4,name:"Clásica A",nameEn:"Classic Room A",beds:"Double",guests:2,price:80,size:"28m²",available:true,photo:I.sofaClose,amenities:["AC","Smart TV"],desc:"Elegante y confortable, perfecta para estadías cortas."},
-  {id:5,name:"Clásica B",nameEn:"Classic Room B",beds:"Double",guests:2,price:80,size:"28m²",available:true,photo:I.living1,amenities:["AC","Smart TV"],desc:"Mismo diseño refinado que Clásica A, con orientación diferente."},
-  {id:6,name:"Suite Verde",nameEn:"Green Suite",beds:"Queen",guests:2,price:110,size:"38m²",available:true,photo:I.greenBed,amenities:["AC","Smart TV","Vista al jardín"],desc:"Pared de acento verde vibrante y mobiliario de madera natural."},
-  {id:7,name:"Suite Premium",nameEn:"Premium Suite",beds:"King+Twin",guests:4,price:180,size:"65m²",available:true,photo:I.livingWide,amenities:["AC","Smart TV","Minibar","Terraza","Rain Shower","Jacuzzi"],desc:"La experiencia más completa de Caonabo 35. Ideal para familias o grupos."},
+  {id:1,name:"Habitación 201",nameEn:"Room 201",beds:"Queen",guests:2,price:90,size:"30m²",available:true,bedroom:I.bathroom,bathroom:I.bathroom,amenities:["AC","Smart TV","Rain Shower"],desc:"Habitación cómoda y elegante con baño privado."},
+  {id:2,name:"Habitación 202",nameEn:"Room 202",beds:"Queen",guests:2,price:75,size:"28m²",available:true,bedroom:I.chessRoom,bathroom:I.bathroom,amenities:["AC","Smart TV","Rain Shower"],desc:"Espacio acogedor con diseño moderno y todas las comodidades."},
+  {id:3,name:"Habitación 203",nameEn:"Room 203",beds:"Queen",guests:2,price:90,size:"30m²",available:true,bedroom:I.greenBed,bathroom:I.bathroom,amenities:["AC","Smart TV","Rain Shower"],desc:"Amplia y luminosa, perfecta para una estadía relajada."},
+  {id:4,name:"Habitación 205",nameEn:"Room 205",beds:"Double",guests:2,price:75,size:"28m²",available:true,bedroom:I.sofaClose,bathroom:I.bathroom,amenities:["AC","Smart TV"],desc:"Confortable habitación con acabados de calidad."},
+  {id:5,name:"Habitación 206",nameEn:"Room 206",beds:"Double",guests:2,price:75,size:"28m²",available:true,bedroom:I.living1,bathroom:I.bathroom,amenities:["AC","Smart TV"],desc:"Diseño refinado con orientación privilegiada."},
+  {id:6,name:"Habitación 207",nameEn:"Room 207",beds:"Double",guests:2,price:60,size:"25m²",available:true,bedroom:I.terrace,bathroom:I.bathroom,amenities:["AC","Smart TV"],desc:"Habitación acogedora a un precio accesible."},
+  {id:7,name:"Habitación 208",nameEn:"Room 208",beds:"Double",guests:2,price:60,size:"25m²",available:true,bedroom:I.livingWide,bathroom:I.bathroom,amenities:["AC","Smart TV"],desc:"Ideal para estadías cortas con todas las comodidades esenciales."},
 ];
 
 const BOOKINGS_INIT = [
@@ -326,6 +326,7 @@ export default function App() {
   const [showConfirmation,setShowConfirmation] = useState(null); // holds completed booking
   const [galFilter,setGalFilter] = useState("all");
   const [galOpen,setGalOpen] = useState(null);
+  const [roomLightbox,setRoomLightbox] = useState(null);
   const [amenModal,setAmenModal] = useState(null);
 
   // Admin UI
@@ -780,7 +781,7 @@ export default function App() {
                 return(
                   <div key={rm.id} className="card" style={{overflow:"hidden"}}>
                     <div style={{height:130,position:"relative",overflow:"hidden"}}>
-                      <img src={rm.photo} alt={rm.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                      <img src={rm.bedroom} alt={rm.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
                       <div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(26,15,8,.8),transparent 50%)"}}/>
                       <div style={{position:"absolute",bottom:"1rem",left:"1rem"}}>
                         <div style={{color:C.ivory,fontSize:"1rem",fontWeight:500}}>{rm.name}</div>
@@ -1240,11 +1241,11 @@ export default function App() {
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:"1.5rem"}}>
             {rooms.map(room=>(
               <div key={room.id} className="room-card">
-                <div style={{height:245,position:"relative",overflow:"hidden"}}>
-                  <img src={room.photo} alt={room.name} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s"}}/>
+                <div style={{height:245,position:"relative",overflow:"hidden",cursor:"pointer"}} onClick={()=>setRoomLightbox({bedroom:room.bedroom,bathroom:room.bathroom,name:lang==="es"?room.name:room.nameEn,idx:0})}>
+                  <img src={room.bedroom} alt={room.name} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s"}}/>
                   <div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(26,15,8,.85) 0%,transparent 55%)"}}/>
                   <div className="rm-ovr" style={{position:"absolute",inset:0,background:"rgba(26,15,8,.65)",display:"flex",alignItems:"center",justifyContent:"center",opacity:0,transition:"opacity .3s"}}>
-                    <button className="btn-gold" onClick={()=>{if(room.available){setSelRoom(room.id);setBookModal(true);setBookError("");}}}>{room.available?t("RESERVAR","BOOK NOW"):t("NO DISPONIBLE","UNAVAILABLE")}</button>
+                    <button className="btn-gold" onClick={(e)=>{e.stopPropagation();if(room.available){setSelRoom(room.id);setBookModal(true);setBookError("");}}}>{room.available?t("RESERVAR","BOOK NOW"):t("NO DISPONIBLE","UNAVAILABLE")}</button>
                   </div>
                   <div style={{position:"absolute",top:"1rem",right:"1rem",background:room.available?C.gold:C.danger,color:room.available?C.ebony:"#fff",padding:".2rem .85rem",fontSize:".64rem",fontFamily:"'Lato',sans-serif",fontWeight:700,letterSpacing:".1em"}}>{room.available?t("DISPONIBLE","AVAILABLE"):t("OCUPADA","OCCUPIED")}</div>
                   <div style={{position:"absolute",bottom:"1.25rem",left:"1.5rem"}}>
@@ -1393,7 +1394,7 @@ export default function App() {
           <Backdrop onClose={()=>{setBookModal(false);setBookError("");}}>
             <ModalBox>
               <div style={{height:170,position:"relative",overflow:"hidden"}}>
-                <img src={rm?.photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                <img src={rm?.bedroom} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
                 <div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(26,15,8,.85),transparent 40%)"}}/>
                 <div style={{position:"absolute",bottom:"1.25rem",left:"1.75rem"}}>
                   <div style={{color:C.gold,fontSize:".62rem",fontFamily:"'Lato',sans-serif",letterSpacing:".2em",textTransform:"uppercase"}}>{t("SOLICITAR RESERVA","REQUEST BOOKING")}</div>
@@ -1449,6 +1450,32 @@ export default function App() {
           <button onClick={()=>setGalOpen(null)} style={{position:"fixed",top:"1rem",right:"1rem",background:"rgba(42,31,22,.7)",border:`1px solid ${C.mahogany}`,color:C.taupe,fontSize:"1.5rem",cursor:"pointer",width:40,height:40,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:"50%"}}>×</button>
         </div>
       )}
+
+      {/* Room photo lightbox */}
+      {roomLightbox!==null&&(()=>{
+        const photos=[roomLightbox.bedroom,roomLightbox.bathroom];
+        const labels=[t("Dormitorio","Bedroom"),t("Baño","Bathroom")];
+        const idx=roomLightbox.idx||0;
+        return(
+          <div style={{position:"fixed",inset:0,background:"rgba(26,15,8,.97)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={()=>setRoomLightbox(null)}>
+            <div style={{position:"relative",maxWidth:950,width:"95%"}} onClick={e=>e.stopPropagation()}>
+              <div style={{position:"relative",maxHeight:"70vh",overflow:"hidden"}}>
+                <img src={photos[idx]} alt={labels[idx]} style={{width:"100%",maxHeight:"70vh",objectFit:"contain",display:"block"}}/>
+                <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(26,15,8,.75))",padding:"2rem 1.5rem 1.25rem"}}>
+                  <div style={{color:C.goldLight,fontSize:"1.1rem",fontWeight:300}}>{roomLightbox.name} — {labels[idx]}</div>
+                  <div style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".68rem",letterSpacing:".15em",textTransform:"uppercase",marginTop:".18rem"}}>Caonabo 35 · {idx+1}/{photos.length}</div>
+                </div>
+              </div>
+              <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:"1.5rem",marginTop:".85rem"}}>
+                {labels.map((lbl,i)=>(
+                  <button key={i} className={i===idx?"btn-gold":"btn-out"} style={{padding:".55rem 1.3rem"}} onClick={()=>setRoomLightbox({...roomLightbox,idx:i})}>{lbl}</button>
+                ))}
+              </div>
+            </div>
+            <button onClick={()=>setRoomLightbox(null)} style={{position:"fixed",top:"1rem",right:"1rem",background:"rgba(42,31,22,.7)",border:`1px solid ${C.mahogany}`,color:C.taupe,fontSize:"1.5rem",cursor:"pointer",width:40,height:40,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:"50%"}}>×</button>
+          </div>
+        );
+      })()}
 
       {/* Amenity modal */}
       {amenModal&&(
