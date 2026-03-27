@@ -2,6 +2,26 @@ import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// Send a push notification to dad's phone via ntfy.sh (free, no account needed)
+async function sendPushNotification(title, message) {
+  const topic = process.env.NTFY_TOPIC;
+  if (!topic) return; // skip if not configured
+  try {
+    await fetch(`https://ntfy.sh/${topic}`, {
+      method: 'POST',
+      headers: {
+        'Title': title,
+        'Priority': 'high',
+        'Tags': 'hotel,bell',
+        'Content-Type': 'text/plain',
+      },
+      body: message,
+    });
+  } catch (e) {
+    console.error('ntfy error:', e.message);
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
@@ -78,6 +98,12 @@ export default async function handler(req, res) {
           </div>
         `,
       });
+
+      // ── Push notification to phone (ntfy.sh) ───────────────────────
+      await sendPushNotification(
+        `🏨 Nueva reserva – ${room.name}`,
+        `${booking.guest} · ${booking.checkIn} → ${booking.checkOut} · $${booking.total}\nTel: ${booking.phone}`
+      );
     }
 
     res.status(200).json({ ok: true });
