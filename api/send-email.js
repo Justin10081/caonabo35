@@ -106,6 +106,53 @@ export default async function handler(req, res) {
       );
     }
 
+    if (type === 'booking_confirmed') {
+      // ── Confirmed email to guest ────────────────────────────────────
+      await resend.emails.send({
+        from: FROM_EMAIL,
+        to: booking.email,
+        subject: `🎉 ¡Reserva confirmada! – ${room.name} · Caonabo 35`,
+        html: `
+          <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#2A1F16;">
+            <div style="background:#2A1F16;padding:2rem;text-align:center;">
+              <h1 style="color:#C4973A;font-size:1.8rem;margin:0;letter-spacing:.1em;">CAONABO 35</h1>
+              <p style="color:#E8C97A;font-size:.75rem;letter-spacing:.2em;margin:.3rem 0 0;">SANTO DOMINGO · R.D.</p>
+            </div>
+            <div style="padding:2.5rem 2rem;background:#FAFAF8;">
+              <p style="font-size:1.05rem;">Estimado/a <strong>${booking.guest}</strong>,</p>
+              <p style="color:#2E7D32;font-weight:bold;font-size:1.05rem;">✅ Su reserva ha sido <u>confirmada</u>. ¡Le esperamos!</p>
+
+              <div style="background:#fff;border:2px solid #C4973A;border-radius:8px;padding:1.5rem;margin:1.5rem 0;">
+                <h3 style="color:#C4973A;margin:0 0 1rem;font-size:.8rem;letter-spacing:.15em;text-transform:uppercase;">Detalles de su Reserva</h3>
+                <table style="width:100%;border-collapse:collapse;">
+                  <tr><td style="padding:.4rem 0;color:#666;font-size:.9rem;">Habitación</td><td style="padding:.4rem 0;font-weight:bold;">${room.name}</td></tr>
+                  <tr><td style="padding:.4rem 0;color:#666;font-size:.9rem;">Check-in</td><td style="padding:.4rem 0;font-weight:bold;">${booking.checkIn}</td></tr>
+                  <tr><td style="padding:.4rem 0;color:#666;font-size:.9rem;">Check-out</td><td style="padding:.4rem 0;font-weight:bold;">${booking.checkOut}</td></tr>
+                  <tr><td style="padding:.4rem 0;color:#666;font-size:.9rem;">Noches</td><td style="padding:.4rem 0;font-weight:bold;">${booking.nights}</td></tr>
+                  <tr><td style="padding:.4rem 0;color:#666;font-size:.9rem;">Huéspedes</td><td style="padding:.4rem 0;font-weight:bold;">${booking.guests}</td></tr>
+                  <tr style="border-top:1px solid #eee;">
+                    <td style="padding:.7rem 0 0;color:#666;font-size:.9rem;">Total</td>
+                    <td style="padding:.7rem 0 0;font-weight:bold;font-size:1.1rem;color:#C4973A;">$${booking.total} + ITBIS</td>
+                  </tr>
+                </table>
+              </div>
+
+              <div style="background:#FFF8E1;border-left:4px solid #C4973A;padding:1rem 1.25rem;margin-bottom:1.5rem;border-radius:0 4px 4px 0;">
+                <p style="margin:0;font-size:.9rem;font-weight:bold;color:#2A1F16;">Información de llegada</p>
+                <p style="margin:.4rem 0 0;font-size:.88rem;color:#555;">📍 Av. Caonabo #35, 2do Piso · Santo Domingo, R.D.<br/>🕐 Check-in: a partir de las 3:00 PM<br/>🕐 Check-out: antes de las 12:00 PM</p>
+              </div>
+
+              <p style="font-size:.9rem;color:#666;">¿Tiene alguna pregunta? Responda este correo o escríbanos por WhatsApp.</p>
+              <p style="margin-top:2rem;">Con gusto le esperamos,<br/><strong>Equipo Caonabo 35</strong></p>
+            </div>
+            <div style="background:#2A1F16;padding:1rem;text-align:center;">
+              <p style="color:#8B6B4E;font-size:.75rem;margin:0;">Av. Caonabo #35, 2do Piso · Santo Domingo, R.D.</p>
+            </div>
+          </div>
+        `,
+      });
+    }
+
     res.status(200).json({ ok: true });
   } catch (err) {
     console.error('Email error:', err);
