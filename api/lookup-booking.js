@@ -5,7 +5,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') return res.status(405).end();
 
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: 'Email required' });
@@ -17,15 +17,13 @@ export default async function handler(req, res) {
 
   const { data, error } = await supabase
     .from('bookings')
-    .select('id, guest, room, check_in, check_out, nights, guests, total, status, paid, notes, created_at')
+    .select('id,guest,room,check_in,check_out,nights,guests,total,status,paid,notes,created_at')
     .eq('email', email.trim().toLowerCase())
     .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
+    .limit(5);
 
-  if (error || !data) {
-    return res.status(404).json({ error: 'Booking not found' });
-  }
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data || data.length === 0) return res.status(404).json({ error: 'No bookings found' });
 
-  return res.status(200).json({ booking: data });
+  return res.status(200).json({ bookings: data });
 }
