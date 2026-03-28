@@ -87,7 +87,7 @@ export default async function handler(req, res) {
       await resend.emails.send({
         from: FROM_EMAIL,
         to: booking.email,
-        subject: `Reserva recibida – ${room.name} · Caonabo 35`,
+        subject: `Reserva #${booking.id} recibida – ${room.name} · Caonabo 35`,
         html: `
           <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#2A1F16;">
             <div style="background:#2A1F16;padding:2rem;text-align:center;">
@@ -96,7 +96,12 @@ export default async function handler(req, res) {
             </div>
             <div style="padding:2.5rem 2rem;background:#FAFAF8;">
               <p style="font-size:1.05rem;">Estimado/a <strong>${booking.guest}</strong>,</p>
-              <p style="line-height:1.7;color:#444;">Su solicitud de reserva ha sido recibida. Para confirmar su habitación, realice la transferencia bancaria indicada abajo y envíenos el comprobante por WhatsApp.</p>
+              <p style="line-height:1.7;color:#444;">Su solicitud de reserva ha sido recibida. Para confirmar su habitación, realice la transferencia bancaria indicada abajo y envíenos el comprobante respondiendo este correo.</p>
+              <div style="background:#2A1F16;border-radius:8px;padding:1.25rem 1.5rem;margin:1.25rem 0;text-align:center;">
+                <p style="color:#C4973A;font-size:.65rem;letter-spacing:.2em;text-transform:uppercase;margin:0 0 .3rem;">Número de Reserva</p>
+                <p style="color:#F7F3EE;font-size:2rem;font-weight:bold;margin:0;letter-spacing:.1em;">#${booking.id}</p>
+                <p style="color:#8B6B4E;font-size:.75rem;margin:.3rem 0 0;">Guarde este número — lo necesitará para consultas</p>
+              </div>
               <div style="background:#fff;border:1px solid #E8C97A;border-radius:8px;padding:1.5rem;margin:1.5rem 0;">
                 <h3 style="color:#C4973A;margin:0 0 1rem;font-size:.8rem;letter-spacing:.15em;text-transform:uppercase;">Detalles de su Reserva</h3>
                 <table style="width:100%;border-collapse:collapse;">
@@ -109,7 +114,7 @@ export default async function handler(req, res) {
                 </table>
               </div>
               ${bankTransferBlock()}
-              <p style="font-size:.88rem;color:#888;line-height:1.6;margin-top:1rem;">¿Preguntas? Responda este correo o escríbanos por WhatsApp. Estamos para servirle.</p>
+              <p style="font-size:.88rem;color:#888;line-height:1.6;margin-top:1rem;">¿Preguntas? Responda este correo. Estamos para servirle.</p>
               <p style="margin-top:1.5rem;">Con gusto le esperamos,<br/><strong>Equipo Caonabo 35</strong></p>
             </div>
             <div style="background:#2A1F16;padding:1rem;text-align:center;">
