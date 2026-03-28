@@ -62,6 +62,22 @@ function bankTransferBlock() {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
+  // Rate limiting: block same email booking more than 3x per hour
+  const bookingEmail = req.body?.bookingData?.email;
+  if (bookingEmail && req.body?.type === 'guest') {
+    const { createClient } = await import('@supabase/supabase-js');
+    const sb = createClient(
+      process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+    const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+    const { count } = await sb.from('bookings').select('*', { count: 'exact', head: true })
+      .eq('email', bookingEmail).gte('created_at', oneHourAgo);
+    if ((count || 0) > 5) {
+      return res.status(429).json({ error: 'Too many requests' });
+    }
+  }
+
   const { type, booking, room } = req.body;
 
   try {
