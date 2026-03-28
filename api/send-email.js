@@ -3,7 +3,8 @@ import { Resend } from 'resend';
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const FROM_EMAIL     = process.env.FROM_EMAIL     || 'Caonabo 35 <onboarding@resend.dev>';
-const ADMIN_EMAIL    = process.env.VITE_ADMIN_EMAIL || 'admin@caonabo35.com';
+const REPLY_TO       = process.env.REPLY_TO       || process.env.ADMIN_EMAIL || '';
+const ADMIN_EMAIL    = process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL || 'admin@caonabo35.com';
 const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP  || '';
 const BANK_NAME      = process.env.BANK_NAME       || 'Banco Popular';
 const BANK_ACCOUNT   = process.env.BANK_ACCOUNT    || '819272006';
@@ -85,6 +86,7 @@ export default async function handler(req, res) {
     if (type === 'guest_confirmation') {
       await resend.emails.send({
         from: FROM_EMAIL,
+        reply_to: REPLY_TO || undefined,
         to: booking.email,
         subject: `Reserva recibida – ${room.name} · Caonabo 35`,
         html: `
@@ -164,6 +166,7 @@ export default async function handler(req, res) {
     if (type === 'booking_confirmed') {
       await resend.emails.send({
         from: FROM_EMAIL,
+        reply_to: REPLY_TO || undefined,
         to: booking.email,
         subject: `🎉 ¡Reserva confirmada! – ${room.name} · Caonabo 35`,
         html: `
