@@ -53,7 +53,7 @@ function bankTransferBlock() {
         <tr style="background:#f9f9f9;"><td style="padding:.55rem .75rem;color:#555;border-bottom:1px solid #e8f5e9;">Número de cuenta</td><td style="padding:.55rem .75rem;font-weight:bold;color:#1B5E20;font-size:1.05rem;border-bottom:1px solid #e8f5e9;">${BANK_ACCOUNT}</td></tr>
         <tr><td style="padding:.55rem .75rem;color:#555;">A nombre de</td><td style="padding:.55rem .75rem;font-weight:bold;">${BANK_HOLDER}</td></tr>
       </table>
-      <p style="margin:.9rem 0 0;font-size:.85rem;color:#2A1F16;">📧 Una vez realizada la transferencia, responda este correo con el comprobante y su reserva quedará confirmada en menos de 24 horas.</p>
+      <p style="margin:.9rem 0 0;font-size:.85rem;color:#2A1F16;">📲 Una vez realizada la transferencia, envíenos el comprobante por WhatsApp${ADMIN_WHATSAPP ? ` al <strong>${ADMIN_WHATSAPP}</strong>` : ''} y su reserva quedará confirmada en menos de 24 horas.</p>
     </div>
   `;
 }
