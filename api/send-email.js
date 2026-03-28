@@ -6,8 +6,8 @@ const FROM_EMAIL     = process.env.FROM_EMAIL     || 'Caonabo 35 <onboarding@res
 const ADMIN_EMAIL    = process.env.VITE_ADMIN_EMAIL || 'admin@caonabo35.com';
 const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP  || '';
 const BANK_NAME      = process.env.BANK_NAME       || 'Banco Popular';
-const BANK_ACCOUNT   = process.env.BANK_ACCOUNT    || '';
-const BANK_HOLDER    = process.env.BANK_HOLDER     || '';
+const BANK_ACCOUNT   = process.env.BANK_ACCOUNT    || '819272006';
+const BANK_HOLDER    = process.env.BANK_HOLDER     || 'Caonabo 35';
 const BANK_TYPE      = process.env.BANK_TYPE       || 'Cuenta de Ahorros';
 
 // ── WhatsApp notification via CallMeBot (free) ────────────────────────────
@@ -40,21 +40,20 @@ async function sendPushNotification(title, message) {
 
 // ── Bank transfer HTML block ──────────────────────────────────────────────
 function bankTransferBlock() {
-  if (!BANK_ACCOUNT) return '';
   return `
     <div style="background:#E8F5E9;border-left:4px solid #2E7D32;padding:1.25rem 1.5rem;border-radius:0 6px 6px 0;margin:1.5rem 0;">
-      <p style="margin:0 0 .6rem;font-weight:bold;color:#1B5E20;font-size:.95rem;">💳 Cómo garantizar su reserva</p>
+      <p style="margin:0 0 .6rem;font-weight:bold;color:#1B5E20;font-size:.95rem;">🏦 Datos para la Transferencia Bancaria</p>
       <p style="margin:0 0 .75rem;font-size:.88rem;color:#2A1F16;line-height:1.6;">
         Para confirmar su habitación, realice una transferencia bancaria con los datos a continuación
-        y envíenos el <strong>comprobante por WhatsApp</strong>.
+        y responda este correo con el <strong>comprobante de pago</strong>.
       </p>
-      <table style="width:100%;border-collapse:collapse;font-size:.88rem;">
-        <tr><td style="padding:.3rem 0;color:#555;width:45%;">Banco</td><td style="font-weight:bold;">${BANK_NAME}</td></tr>
-        <tr><td style="padding:.3rem 0;color:#555;">Tipo de cuenta</td><td style="font-weight:bold;">${BANK_TYPE}</td></tr>
-        <tr><td style="padding:.3rem 0;color:#555;">Número de cuenta</td><td style="font-weight:bold;color:#1B5E20;font-size:1rem;">${BANK_ACCOUNT}</td></tr>
-        <tr><td style="padding:.3rem 0;color:#555;">A nombre de</td><td style="font-weight:bold;">${BANK_HOLDER}</td></tr>
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem;background:#fff;border-radius:6px;overflow:hidden;">
+        <tr style="background:#f9f9f9;"><td style="padding:.55rem .75rem;color:#555;width:45%;border-bottom:1px solid #e8f5e9;">Banco</td><td style="padding:.55rem .75rem;font-weight:bold;border-bottom:1px solid #e8f5e9;">${BANK_NAME}</td></tr>
+        <tr><td style="padding:.55rem .75rem;color:#555;border-bottom:1px solid #e8f5e9;">Tipo de cuenta</td><td style="padding:.55rem .75rem;font-weight:bold;border-bottom:1px solid #e8f5e9;">${BANK_TYPE}</td></tr>
+        <tr style="background:#f9f9f9;"><td style="padding:.55rem .75rem;color:#555;border-bottom:1px solid #e8f5e9;">Número de cuenta</td><td style="padding:.55rem .75rem;font-weight:bold;color:#1B5E20;font-size:1.05rem;border-bottom:1px solid #e8f5e9;">${BANK_ACCOUNT}</td></tr>
+        <tr><td style="padding:.55rem .75rem;color:#555;">A nombre de</td><td style="padding:.55rem .75rem;font-weight:bold;">${BANK_HOLDER}</td></tr>
       </table>
-      ${ADMIN_WHATSAPP ? `<p style="margin:.9rem 0 0;font-size:.88rem;color:#2A1F16;">📲 Envíe el comprobante por WhatsApp al <strong>${ADMIN_WHATSAPP}</strong> y su reserva quedará confirmada.</p>` : ''}
+      <p style="margin:.9rem 0 0;font-size:.85rem;color:#2A1F16;">📧 Una vez realizada la transferencia, responda este correo con el comprobante y su reserva quedará confirmada en menos de 24 horas.</p>
     </div>
   `;
 }
