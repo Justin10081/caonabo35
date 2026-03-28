@@ -45,8 +45,7 @@ function bankTransferBlock() {
     <div style="background:#E8F5E9;border-left:4px solid #2E7D32;padding:1.25rem 1.5rem;border-radius:0 6px 6px 0;margin:1.5rem 0;">
       <p style="margin:0 0 .6rem;font-weight:bold;color:#1B5E20;font-size:.95rem;">🏦 Datos para la Transferencia Bancaria</p>
       <p style="margin:0 0 .75rem;font-size:.88rem;color:#2A1F16;line-height:1.6;">
-        Para confirmar su habitación, realice una transferencia bancaria con los datos a continuación
-        y responda este correo con el <strong>comprobante de pago</strong>.
+        Para confirmar su habitación, realice una transferencia bancaria con los datos a continuación.
       </p>
       <table style="width:100%;border-collapse:collapse;font-size:.9rem;background:#fff;border-radius:6px;overflow:hidden;">
         <tr style="background:#f9f9f9;"><td style="padding:.55rem .75rem;color:#555;width:45%;border-bottom:1px solid #e8f5e9;">Banco</td><td style="padding:.55rem .75rem;font-weight:bold;border-bottom:1px solid #e8f5e9;">${BANK_NAME}</td></tr>
