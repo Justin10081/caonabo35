@@ -199,28 +199,50 @@ function hasConflict(bookings, roomId, checkIn, checkOut, excludeId=null) {
 }
 
 // ─── Price breakdown helper ───────────────────────────────────────────
-function calcPrice(roomPrice, checkIn, checkOut, discount, seasons=[]) {
-  const n = nights(checkIn, checkOut);
-  // Check seasonal pricing
-  let effectivePrice = roomPrice;
-  let maxPct = 0;
-  if(seasons && seasons.length > 0 && checkIn && checkOut) {
-    const cin = new Date(checkIn);
-    const cout = new Date(checkOut);
-    seasons.forEach(s => {
-      // Build season start/end for this year and next year
-      const year = cin.getFullYear();
-      [year, year+1].forEach(y => {
-        const sStart = new Date(`${parseInt(s.startMonth) > parseInt(s.endMonth) ? y-1 : y}-${s.startMonth}-${s.startDay}`);
-        const sEnd = new Date(`${y}-${s.endMonth}-${s.endDay}`);
-        if(cin < sEnd && cout > sStart) {
-          maxPct = Math.max(maxPct, s.pct||0);
-        }
-      });
-    });
-    if(maxPct > 0) effectivePrice = Math.round(roomPrice * (1 + maxPct/100));
+// Returns the effective nightly rate for one date, honoring (1) explicit date-range temporary
+// rates (his dad's "set a price for these dates" — auto-expires because a past range can't match
+// a future night), then (2) legacy recurring month/day % seasons, else the base price.
+function nightlyRate(roomPrice, ymd, mmdd, seasons, roomId) {
+  const ranges = (seasons||[]).filter(s => s && s.type==='range' && s.start && s.end
+    && ymd >= s.start && ymd <= s.end
+    && (!s.room || s.room==='all' || String(s.room)===String(roomId)));
+  if(ranges.length) {
+    const specific = ranges.filter(s => s.room && s.room!=='all');   // a room-specific rule beats an "all rooms" rule
+    const pool = specific.length ? specific : ranges;
+    const rateOf = s => s.mode==='pct' ? Math.round(roomPrice*(1+(s.pct||0)/100)) : (Number(s.price)||roomPrice);
+    const pick = pool.reduce((a,b)=> rateOf(b) > rateOf(a) ? b : a);
+    return { rate: rateOf(pick), pct: pick.mode==='pct' ? (pick.pct||0) : 0, seasonal: true };
   }
-  const subtotal = effectivePrice * n;
+  let pct = 0;
+  (seasons||[]).forEach(s => {
+    if(!s || s.type==='range') return;
+    const sMD = parseInt(s.startMonth)*100 + parseInt(s.startDay);
+    const eMD = parseInt(s.endMonth)*100 + parseInt(s.endDay);
+    const inS = sMD<=eMD ? (mmdd>=sMD && mmdd<=eMD) : (mmdd>=sMD || mmdd<=eMD);  // wraps year-end when start>end
+    if(inS) pct = Math.max(pct, s.pct||0);
+  });
+  if(pct>0) return { rate: Math.round(roomPrice*(1+pct/100)), pct, seasonal: true };
+  return { rate: roomPrice, pct: 0, seasonal: false };
+}
+
+// ─── Price breakdown helper (per-night, so partial-season stays are priced correctly) ───
+function calcPrice(roomPrice, checkIn, checkOut, discount, seasons=[], roomId=null) {
+  const n = nights(checkIn, checkOut);
+  const pad = x => String(x).padStart(2,'0');
+  let subtotal = 0, maxPct = 0, seasonalApplied = false;
+  if(checkIn && checkOut && n > 0) {
+    const start = new Date(checkIn+"T00:00:00");
+    for(let i=0;i<n;i++){
+      const d = new Date(start); d.setDate(d.getDate()+i);
+      const ymd = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+      const mmdd = (d.getMonth()+1)*100 + d.getDate();
+      const nr = nightlyRate(roomPrice, ymd, mmdd, seasons, roomId);
+      subtotal += nr.rate;
+      if(nr.seasonal){ seasonalApplied = true; maxPct = Math.max(maxPct, nr.pct); }
+    }
+  } else {
+    subtotal = roomPrice * n;
+  }
   const tax = Math.round(subtotal * TAX_RATE * 100) / 100;
   let total = subtotal + tax;
   let discountAmt = 0;
@@ -230,7 +252,7 @@ function calcPrice(roomPrice, checkIn, checkOut, discount, seasons=[]) {
       : Math.min(discount.amount, total);
     total = Math.max(0, total - discountAmt);
   }
-  return { nights: n, subtotal, tax, total, discountAmt, seasonalPct: maxPct };
+  return { nights: n, subtotal, tax, total, discountAmt, seasonalPct: maxPct, seasonal: seasonalApplied };
 }
 
 // ─── CSS ──────────────────────────────────────────────────────────────
@@ -513,6 +535,8 @@ export default function App() {
   const [seasons,setSeasons] = useState([]);
   const [editSeasons,setEditSeasons] = useState(false);
   const [newSeason,setNewSeason] = useState({name:'',startMonth:'12',startDay:'15',endMonth:'01',endDay:'05',pct:20});
+  const [editRange,setEditRange] = useState(false);   // his dad's "temporary price for a date range that reverts"
+  const [newRange,setNewRange] = useState({name:'',room:'all',start:'',end:'',price:''});
   const [editRoomPrices,setEditRoomPrices] = useState({});
   const [priceEdits,setPriceEdits] = useState({});
   const [addDiscountForm,setAddDiscountForm] = useState({code:"",label:"",type:"percent",amount:""});
@@ -878,7 +902,7 @@ export default function App() {
     }
     const basePrice = roomPriceOverrides[rm.id] || rm.price;
     const effPrice = rm.discount>0 ? Math.round(basePrice*(1-rm.discount/100)) : basePrice;
-    const pricing = calcPrice(effPrice, bookForm.checkIn, bookForm.checkOut, appliedDiscount, seasons);
+    const pricing = calcPrice(effPrice, bookForm.checkIn, bookForm.checkOut, appliedDiscount, seasons, rm.id);
     // Upload ID photo to Supabase Storage
     let idPhotoUrl = '';
     if(bookForm.idPhotoFile) {
@@ -926,7 +950,7 @@ export default function App() {
     }
     const rm = rooms.find(r=>r.id===b.room);
     const n = b.checkIn&&b.checkOut?nights(b.checkIn,b.checkOut):1;
-    const pricing = calcPrice(rm?.price||0, b.checkIn||TODAY, b.checkOut||TODAY);
+    const pricing = calcPrice(rm?.price||0, b.checkIn||TODAY, b.checkOut||TODAY, null, seasons, rm?.id);
     const updated = {...b, total:pricing.total, subtotal:pricing.subtotal, tax:pricing.tax};
     // Persist FIRST, then update the UI — otherwise a silent failure "saves" locally and reverts on refresh.
     const {error} = await supabase.from("bookings").update({guest:updated.guest,email:updated.email,phone:updated.phone,room:updated.room,check_in:updated.checkIn,check_out:updated.checkOut,guests:updated.guests,status:updated.status,total:updated.total,paid:updated.paid,source:updated.source,notes:updated.notes}).eq("id",updated.id);
@@ -944,7 +968,7 @@ export default function App() {
       setNewBError("Conflicto de fechas: esa habitación ya tiene una reserva en ese período.");return;
     }
     const rm = rooms.find(r=>r.id===newB.room);
-    const pricing = calcPrice(rm?.price||0,newB.checkIn,newB.checkOut);
+    const pricing = calcPrice(rm?.price||0,newB.checkIn,newB.checkOut,null,seasons,rm?.id);
     const bData = {guest:newB.guest,email:newB.email,phone:newB.phone,room:newB.room,check_in:newB.checkIn,check_out:newB.checkOut,nights:pricing.nights,guests:newB.guests,total:pricing.total,status:newB.status,paid:newB.paid||false,source:newB.source,notes:newB.notes};
     const {data:ins,error} = await supabase.from("bookings").insert([bData]).select().single();
     if(error){showToast("Error: "+error.message);return;}
@@ -1510,7 +1534,7 @@ export default function App() {
 
             {calView==="precios"&&(<div>
               <p style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".72rem",marginTop:0,marginBottom:"1.1rem"}}>Precio y disponibilidad por noche, como en Airbnb. Clic en una celda para esa noche, o usa "Editar en bloque" para un rango.</p>
-              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} />
+              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} seasons={seasons} />
             </div>)}
           </div>)}
 
@@ -1824,17 +1848,58 @@ export default function App() {
               {/* ── Seasonal Pricing ── */}
               <div style={{marginTop:"2rem"}}>
                 <div className="card" style={{marginBottom:"1.5rem"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:".4rem",flexWrap:"wrap",gap:".5rem"}}>
                     <h3 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"1.1rem",fontWeight:600,color:C.ebony,margin:0}}>🌡️ Precios Estacionales</h3>
-                    <button className="btn-sm" onClick={()=>setEditSeasons(v=>!v)}>{editSeasons?"Cerrar":"+ Añadir"}</button>
-                  </div>
-                  {seasons.length===0&&<p style={{fontFamily:"'Lato',sans-serif",fontSize:".82rem",color:C.taupe}}>Sin temporadas configuradas. Los precios base aplican todo el año.</p>}
-                  {seasons.map((s,i)=>(
-                    <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:".6rem .8rem",background:C.smoke,borderRadius:4,marginBottom:".5rem",fontFamily:"'Lato',sans-serif",fontSize:".82rem"}}>
-                      <span><strong>{s.name}</strong> · {s.startMonth}/{s.startDay} – {s.endMonth}/{s.endDay} · <span style={{color:C.gold,fontWeight:700}}>+{s.pct}%</span></span>
-                      <button className="btn-danger" style={{padding:".2rem .6rem",fontSize:".65rem"}} onClick={async()=>{const ns=seasons.filter((_,j)=>j!==i);const{error}=await supabase.from('settings').update({seasons_json:JSON.stringify(ns)}).eq('id',1);if(error){showToast("❌ Error al guardar temporada: "+error.message);return;}setSeasons(ns);showToast("Temporada eliminada ✓");}}>✕</button>
+                    <div style={{display:"flex",gap:".4rem",flexWrap:"wrap"}}>
+                      <button className="btn-sm" onClick={()=>{setEditRange(v=>!v);setEditSeasons(false);}}>{editRange?"Cerrar":"📅 Tarifa temporal"}</button>
+                      <button className="btn-sm-o" onClick={()=>{setEditSeasons(v=>!v);setEditRange(false);}}>{editSeasons?"Cerrar":"🔁 Temporada anual"}</button>
                     </div>
-                  ))}
+                  </div>
+                  <p style={{fontFamily:"'Lato',sans-serif",fontSize:".72rem",color:C.taupe,marginTop:0,marginBottom:"1rem"}}>Tarifa temporal = un precio para fechas específicas que vuelve al precio normal cuando pasan. Temporada anual = un aumento % que se repite cada año.</p>
+                  {seasons.length===0&&<p style={{fontFamily:"'Lato',sans-serif",fontSize:".82rem",color:C.taupe}}>Sin precios especiales. Los precios base aplican todo el año.</p>}
+                  {seasons.map((s,i)=>{
+                    const del=async()=>{const ns=seasons.filter((_,j)=>j!==i);const{error}=await supabase.from('settings').update({seasons_json:JSON.stringify(ns)}).eq('id',1);if(error){showToast("❌ Error: "+error.message);return;}setSeasons(ns);showToast("Eliminada ✓");};
+                    if(s.type==='range'){
+                      const roomName = (!s.room||s.room==='all') ? "Todas" : (rooms.find(r=>String(r.id)===String(s.room))?.name||("Hab. "+s.room));
+                      const st = TODAY>s.end ? {t:"expirada",c:C.taupe} : TODAY<s.start ? {t:"próxima",c:"#1565C0"} : {t:"activa",c:"#2e7d32"};
+                      return(
+                        <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:".5rem",padding:".6rem .8rem",background:C.smoke,borderRadius:4,marginBottom:".5rem",fontFamily:"'Lato',sans-serif",fontSize:".8rem",opacity:st.t==="expirada"?.55:1}}>
+                          <span>📅 {s.name?<strong>{s.name} · </strong>:null}{roomName} · {s.start} → {s.end} · <span style={{color:C.gold,fontWeight:700}}>{s.mode==='pct'?`+${s.pct}%`:`$${s.price}/noche`}</span> · <span style={{color:st.c,fontWeight:700,textTransform:"uppercase",fontSize:".62rem"}}>{st.t}</span></span>
+                          <button className="btn-danger" style={{padding:".2rem .6rem",fontSize:".65rem",flexShrink:0}} onClick={del}>✕</button>
+                        </div>
+                      );
+                    }
+                    return(
+                      <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:".5rem",padding:".6rem .8rem",background:C.smoke,borderRadius:4,marginBottom:".5rem",fontFamily:"'Lato',sans-serif",fontSize:".8rem"}}>
+                        <span>🔁 <strong>{s.name}</strong> · {s.startMonth}/{s.startDay} – {s.endMonth}/{s.endDay} · <span style={{color:C.gold,fontWeight:700}}>+{s.pct}%</span> <span style={{color:C.taupe,fontSize:".64rem"}}>(cada año)</span></span>
+                        <button className="btn-danger" style={{padding:".2rem .6rem",fontSize:".65rem",flexShrink:0}} onClick={del}>✕</button>
+                      </div>
+                    );
+                  })}
+                  {editRange&&(
+                    <div style={{borderTop:`1px solid ${C.sand}`,paddingTop:"1rem",marginTop:".5rem"}}>
+                      <div style={{fontFamily:"'Lato',sans-serif",fontSize:".72rem",color:C.warm,fontWeight:700,marginBottom:".7rem"}}>📅 Precio temporal para fechas específicas (vuelve al normal después)</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:".75rem",marginBottom:".75rem"}}>
+                        <div><FL>Habitación</FL><select className="sel" value={newRange.room} onChange={e=>setNewRange(p=>({...p,room:e.target.value}))}><option value="all">Todas</option>{rooms.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+                        <div><FL>Precio / noche ($)</FL><Inp type="number" value={newRange.price} onChange={e=>setNewRange(p=>({...p,price:e.target.value}))}/></div>
+                        <div><FL>Desde</FL><Inp type="date" value={newRange.start} onChange={e=>setNewRange(p=>({...p,start:e.target.value}))}/></div>
+                        <div><FL>Hasta</FL><Inp type="date" value={newRange.end} onChange={e=>setNewRange(p=>({...p,end:e.target.value}))}/></div>
+                        <div style={{gridColumn:"1/-1"}}><FL>Nombre (opcional, ej: Navidad)</FL><Inp value={newRange.name} onChange={e=>setNewRange(p=>({...p,name:e.target.value}))}/></div>
+                      </div>
+                      <button className="btn-gold" style={{width:"100%"}} onClick={async()=>{
+                        if(!newRange.start||!newRange.end||!newRange.price){showToast("Elige fechas y precio");return;}
+                        if(newRange.end<newRange.start){showToast("La fecha 'Hasta' debe ser igual o posterior a 'Desde'");return;}
+                        const rule={type:'range',mode:'price',name:newRange.name,room:newRange.room,start:newRange.start,end:newRange.end,price:Number(newRange.price)};
+                        const ns=[...seasons,rule];
+                        const{error}=await supabase.from('settings').update({seasons_json:JSON.stringify(ns)}).eq('id',1);
+                        if(error){showToast("❌ Error al guardar: "+error.message);return;}
+                        setSeasons(ns);
+                        setNewRange({name:'',room:'all',start:'',end:'',price:''});
+                        setEditRange(false);
+                        showToast("Tarifa temporal guardada ✓");
+                      }}>GUARDAR TARIFA TEMPORAL</button>
+                    </div>
+                  )}
                   {editSeasons&&(
                     <div style={{borderTop:`1px solid ${C.sand}`,paddingTop:"1rem",marginTop:".5rem"}}>
                       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:".75rem",marginBottom:".75rem"}}>
@@ -1919,7 +1984,7 @@ export default function App() {
                 </div>
                 {editBooking.checkIn&&editBooking.checkOut&&editBooking.checkIn<editBooking.checkOut&&(()=>{
                   const rm=rooms.find(r=>r.id===editBooking.room);
-                  const p=calcPrice(rm?.price||0,editBooking.checkIn,editBooking.checkOut);
+                  const p=calcPrice(rm?.price||0,editBooking.checkIn,editBooking.checkOut,null,seasons,rm?.id);
                   return(
                     <div className="price-breakdown">
                       <div className="price-row"><span>${rm?.price} × {p.nights} noches</span><span>{fmtMoney(p.subtotal)}</span></div>
@@ -1978,7 +2043,7 @@ export default function App() {
               </div>
               {newB.checkIn&&newB.checkOut&&newB.checkIn<newB.checkOut&&(()=>{
                 const rm=rooms.find(r=>r.id===newB.room);
-                const p=calcPrice(rm?.price||0,newB.checkIn,newB.checkOut);
+                const p=calcPrice(rm?.price||0,newB.checkIn,newB.checkOut,null,seasons,rm?.id);
                 return(
                   <div className="price-breakdown">
                     <div className="price-row"><span>${rm?.price} × {p.nights} noches</span><span>{fmtMoney(p.subtotal)}</span></div>
@@ -2354,7 +2419,7 @@ export default function App() {
       {/* Booking modal with price breakdown + conflict protection */}
       {bookModal&&(()=>{
         const rm=rooms.find(r=>r.id===selRoom);
-        const pricing=bookForm.checkIn&&bookForm.checkOut&&bookForm.checkIn<bookForm.checkOut?calcPrice(rm?.price||0,bookForm.checkIn,bookForm.checkOut,null,seasons):null;
+        const pricing=bookForm.checkIn&&bookForm.checkOut&&bookForm.checkIn<bookForm.checkOut?calcPrice(rm?.price||0,bookForm.checkIn,bookForm.checkOut,null,seasons,rm?.id):null;
         return(
           <Backdrop onClose={()=>{setBookModal(false);setBookError("");}}>
             <ModalBox>

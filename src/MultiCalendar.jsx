@@ -8,7 +8,7 @@ const iso = (d) => d.toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const WD_ES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
-export default function MultiCalendar({ rooms = [], bookings = [], supabase, showToast, today }) {
+export default function MultiCalendar({ rooms = [], bookings = [], supabase, showToast, today, seasons = [] }) {
   const [start, setStart] = useState(() => { const t = today ? new Date(today + "T00:00:00") : new Date(); t.setHours(0, 0, 0, 0); return t; });
   const [span, setSpan] = useState(14);
   const [nights, setNights] = useState({});            // `${roomId}|${date}` -> {price, available}
@@ -32,7 +32,23 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
 
   const basePrice = (room) => room.price ?? room.price_override ?? 0;
   const cell = (roomId, date) => nights[`${roomId}|${date}`];
-  const effPrice = (room, date) => { const c = cell(room.id, date); return (c && c.price != null) ? c.price : basePrice(room); };
+  // Effective per-night rate that matches what a guest actually pays: manual override wins, then a
+  // seasonal date-range rule (same engine as the booking price), then the room's base price.
+  const seasonalRate = (room, date) => {
+    const base = basePrice(room);
+    const ranges = (seasons || []).filter(s => s && s.type === "range" && s.start && s.end && date >= s.start && date <= s.end && (!s.room || s.room === "all" || String(s.room) === String(room.id)));
+    if (!ranges.length) return null;
+    const specific = ranges.filter(s => s.room && s.room !== "all");
+    const pool = specific.length ? specific : ranges;
+    const rateOf = s => s.mode === "pct" ? Math.round(base * (1 + (s.pct || 0) / 100)) : (Number(s.price) || base);
+    return Math.max(...pool.map(rateOf));
+  };
+  const effPrice = (room, date) => {
+    const c = cell(room.id, date);
+    if (c && c.price != null) return c.price;
+    const sr = seasonalRate(room, date);
+    return sr != null ? sr : basePrice(room);
+  };
   const isBlocked = (roomId, date) => cell(roomId, date)?.available === false;
   const bookedSet = useMemo(() => {
     const s = new Set();
@@ -125,12 +141,13 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
                   const booked = bookedSet.has(`${room.id}|${date}`);
                   const blocked = isBlocked(room.id, date);
                   const custom = cell(room.id, date)?.price != null;
-                  const bg = booked ? "#eceff1" : blocked ? "#fdecea" : custom ? "#fff8ea" : "#fff";
+                  const seasonal = !custom && seasonalRate(room, date) != null;
+                  const bg = booked ? "#eceff1" : blocked ? "#fdecea" : custom ? "#fff8ea" : seasonal ? "#eef5ff" : "#fff";
                   return (
                     <td key={date}
                       onClick={() => { if (booked) return; setSel({ roomId: room.id, date }); const c = cell(room.id, date); setDraft({ price: c?.price ?? "", available: c?.available !== false }); }}
                       title={booked ? "Reservada" : blocked ? "Bloqueada" : "Clic para editar"}
-                      style={{ borderBottom: `1px solid ${LINE}`, borderRight: `1px solid #f3ece0`, textAlign: "center", padding: ".4rem .2rem", fontSize: ".72rem", cursor: booked ? "not-allowed" : "pointer", background: bg, color: booked ? "#90a4ae" : blocked ? "#B71C1C" : INK, fontWeight: custom ? 700 : 400 }}>
+                      style={{ borderBottom: `1px solid ${LINE}`, borderRight: `1px solid #f3ece0`, textAlign: "center", padding: ".4rem .2rem", fontSize: ".72rem", cursor: booked ? "not-allowed" : "pointer", background: bg, color: booked ? "#90a4ae" : blocked ? "#B71C1C" : INK, fontWeight: (custom || seasonal) ? 700 : 400 }}>
                       {booked ? "•" : blocked ? "—" : `$${effPrice(room, date)}`}
                     </td>
                   );
@@ -142,6 +159,7 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
       </div>
       <p style={{ fontSize: ".68rem", color: "#8B6B4E", marginTop: ".6rem" }}>
         <span style={{ background: "#fff8ea", padding: "0 .3rem", border: `1px solid ${LINE}` }}>precio propio</span>{" "}
+        <span style={{ background: "#eef5ff", padding: "0 .3rem", border: `1px solid ${LINE}` }}>tarifa temporal</span>{" "}
         <span style={{ background: "#fdecea", color: "#B71C1C", padding: "0 .3rem" }}>— bloqueada</span>{" "}
         <span style={{ background: "#eceff1", color: "#90a4ae", padding: "0 .3rem" }}>• reservada</span>{" "}· clic en una celda para el precio de esa noche.
       </p>
