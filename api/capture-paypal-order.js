@@ -4,6 +4,8 @@ import { Resend } from 'resend';
 const supabase = createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+const requiredDeposit = (total) => Math.max(20, Math.round(Number(total || 0) * 0.30));
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -43,7 +45,23 @@ export default async function handler(req, res) {
     capture.purchase_units?.[0]?.payments?.captures?.[0]?.amount?.value || 0
   );
 
-  // Mark booking confirmed + paid in Supabase
+  // SECURITY: the captured order must reference THIS booking (set server-side at create time),
+  // and the amount paid must actually cover the required deposit. Without this, an attacker could
+  // pay $0.01 on their own order and reuse it to mark any other guest's booking paid+confirmed.
+  const ref = capture.purchase_units?.[0]?.reference_id;
+  if (String(ref) !== String(bookingId)) {
+    console.error('Order/booking reference mismatch', { ref, bookingId });
+    return res.status(400).json({ error: 'Payment does not match this booking' });
+  }
+  const { data: existing, error: lookupErr } = await supabase
+    .from('bookings').select('total,paid').eq('id', bookingId).single();
+  if (lookupErr || !existing) return res.status(404).json({ error: 'Booking not found' });
+  if (amountPaid + 0.01 < requiredDeposit(existing.total)) {
+    console.error('Insufficient deposit', { amountPaid, required: requiredDeposit(existing.total) });
+    return res.status(400).json({ error: 'Insufficient deposit amount' });
+  }
+
+  // Verified — mark booking confirmed + paid in Supabase
   const { data: booking, error } = await supabase
     .from('bookings')
     .update({ status: 'confirmed', paid: true })

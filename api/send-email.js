@@ -61,23 +61,28 @@ function bankTransferBlock() {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  // Rate limiting: block same email booking more than 3x per hour
-  const bookingEmail = req.body?.bookingData?.email;
-  if (bookingEmail && req.body?.type === 'guest') {
+  const { type, booking, room } = req.body || {};
+
+  // SECURITY: without this, this endpoint is an open relay — anyone could POST an arbitrary
+  // recipient + attacker-authored HTML and send it FROM the hotel's verified domain (phishing).
+  // Guest-facing emails may only go to an address that actually has a booking, and are rate-limited.
+  const GUEST_TYPES = ['guest_confirmation', 'booking_confirmed'];
+  if (GUEST_TYPES.includes(type)) {
+    const to = String(booking?.email || '').trim().toLowerCase();
+    if (!to) return res.status(400).json({ error: 'Missing recipient' });
     const { createClient } = await import('@supabase/supabase-js');
     const sb = createClient(
       process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
       process.env.SUPABASE_SERVICE_ROLE_KEY
     );
+    const { count: exists } = await sb.from('bookings')
+      .select('*', { count: 'exact', head: true }).eq('email', to);
+    if (!exists) return res.status(403).json({ error: 'No booking for this address' });
     const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
-    const { count } = await sb.from('bookings').select('*', { count: 'exact', head: true })
-      .eq('email', bookingEmail).gte('created_at', oneHourAgo);
-    if ((count || 0) > 5) {
-      return res.status(429).json({ error: 'Too many requests' });
-    }
+    const { count: recent } = await sb.from('bookings')
+      .select('*', { count: 'exact', head: true }).eq('email', to).gte('created_at', oneHourAgo);
+    if ((recent || 0) > 5) return res.status(429).json({ error: 'Too many requests' });
   }
-
-  const { type, booking, room } = req.body;
 
   try {
 
