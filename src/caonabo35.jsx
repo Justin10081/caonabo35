@@ -1451,6 +1451,14 @@ export default function App() {
               })()}
             </div>
 
+            {/* View toggle: month reservations vs per-night price calendar */}
+            <div style={{display:"flex",gap:".4rem",marginBottom:"1.2rem",flexWrap:"wrap"}}>
+              {[["mes","📅 Reservas del mes"],["precios","💲 Precios por noche"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setCalView(v)} className={`tog${calView===v?" act":""}`}>{l}</button>
+              ))}
+            </div>
+
+            {calView==="mes"&&(<>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem",flexWrap:"wrap",gap:".75rem"}}>
               <div style={{display:"flex",alignItems:"center",gap:"1rem"}}>
                 <button className="btn-sm-o" style={{padding:".42rem .85rem"}} onClick={calNavPrev}>←</button>
@@ -1527,6 +1535,12 @@ export default function App() {
                 );
               })}
             </div>
+            </>)}
+
+            {calView==="precios"&&(<div>
+              <p style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".74rem",marginTop:0,marginBottom:"1.1rem"}}>Precio de cada noche. Clic en una celda para esa noche, o usa "Editar en bloque" para un rango. Las tarifas temporales aparecen en azul.</p>
+              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} seasons={seasons} />
+            </div>)}
           </div>)}
 
           {/* ── ROOMS ── */}
@@ -1956,11 +1970,9 @@ export default function App() {
               </div>
             </div>
 
-            {/* ── Per-night price grid (moved here from Calendario) ── */}
-            <div style={{marginTop:"1.75rem"}}>
-              <h3 style={{fontFamily:"'Lato',sans-serif",fontSize:".8rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,marginBottom:".3rem"}}>📆 Calendario de precios por noche (avanzado)</h3>
-              <p style={{fontFamily:"'Lato',sans-serif",fontSize:".76rem",color:C.taupe,marginTop:0,marginBottom:"1.1rem"}}>Ajusta el precio de una noche específica, o usa "Editar en bloque" para un rango. Las tarifas temporales aparecen en azul.</p>
-              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} seasons={seasons} />
+            {/* The per-night price calendar lives on the Calendario tab (it's a calendar) */}
+            <div style={{marginTop:"1.5rem",padding:"1rem 1.25rem",background:C.smoke,borderLeft:`3px solid ${C.gold}`,maxWidth:860}}>
+              <p style={{fontFamily:"'Lato',sans-serif",fontSize:".8rem",color:C.warm,margin:0,lineHeight:1.6}}>📆 El <strong>calendario de precios por noche</strong> está en la pestaña <strong>📅 Calendario</strong> → botón <strong>"💲 Precios por noche"</strong>.</p>
             </div>
           </div>)}
 

@@ -90,8 +90,8 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
     showToast?.(`${rows.length} noche(s) actualizada(s) ✓`); load();
   }
 
-  const th = { position: "sticky", top: 0, background: INK, color: CREAM, padding: ".4rem .3rem", fontSize: ".62rem", textAlign: "center", minWidth: 66, fontWeight: 600, zIndex: 2 };
-  const nameCell = { position: "sticky", left: 0, background: CREAM, padding: ".4rem .6rem", fontSize: ".72rem", fontWeight: 600, color: INK, whiteSpace: "nowrap", borderRight: `2px solid ${GOLD}`, zIndex: 1 };
+  const th = { position: "sticky", top: 0, background: INK, color: CREAM, padding: ".55rem .4rem", fontSize: ".72rem", textAlign: "center", minWidth: 88, fontWeight: 600, zIndex: 2 };
+  const nameCell = { position: "sticky", left: 0, background: CREAM, padding: ".6rem .8rem", fontSize: ".84rem", fontWeight: 600, color: INK, whiteSpace: "nowrap", borderRight: `2px solid ${GOLD}`, zIndex: 1 };
 
   return (
     <div>
@@ -147,7 +147,7 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
                     <td key={date}
                       onClick={() => { if (booked) return; setSel({ roomId: room.id, date }); const c = cell(room.id, date); setDraft({ price: c?.price ?? "", available: c?.available !== false }); }}
                       title={booked ? "Reservada" : blocked ? "Bloqueada" : "Clic para editar"}
-                      style={{ borderBottom: `1px solid ${LINE}`, borderRight: `1px solid #f3ece0`, textAlign: "center", padding: ".4rem .2rem", fontSize: ".72rem", cursor: booked ? "not-allowed" : "pointer", background: bg, color: booked ? "#90a4ae" : blocked ? "#B71C1C" : INK, fontWeight: (custom || seasonal) ? 700 : 400 }}>
+                      style={{ borderBottom: `1px solid ${LINE}`, borderRight: `1px solid #f3ece0`, textAlign: "center", padding: ".7rem .35rem", fontSize: ".9rem", cursor: booked ? "not-allowed" : "pointer", background: bg, color: booked ? "#90a4ae" : blocked ? "#B71C1C" : INK, fontWeight: (custom || seasonal) ? 700 : 400 }}>
                       {booked ? "•" : blocked ? "—" : `$${effPrice(room, date)}`}
                     </td>
                   );
