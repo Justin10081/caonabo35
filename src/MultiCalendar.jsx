@@ -8,7 +8,7 @@ const iso = (d) => d.toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const WD_ES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
-export default function MultiCalendar({ rooms = [], bookings = [], supabase, showToast, today, seasons = [], channelBlocks = null }) {
+export default function MultiCalendar({ rooms = [], bookings = [], supabase, showToast, today, seasons = [], channelBlocks = null, refreshKey = 0 }) {
   const [start, setStart] = useState(() => { const t = today ? new Date(today + "T00:00:00") : new Date(); t.setHours(0, 0, 0, 0); return t; });
   const [span, setSpan] = useState(14);
   const [nights, setNights] = useState({});            // `${roomId}|${date}` -> {price, available}
@@ -28,7 +28,7 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
     const m = {}; (data || []).forEach(r => { m[`${r.room_id}|${r.date}`] = { price: r.price, available: r.available }; });
     setNights(m); setLoading(false);
   }, [supabase, rangeStart, rangeEnd, showToast]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);   // refreshKey bumps when another admin edits a night → reload live
 
   const basePrice = (room) => room.price ?? room.price_override ?? 0;
   const cell = (roomId, date) => nights[`${roomId}|${date}`];

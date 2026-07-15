@@ -495,9 +495,11 @@ export default function App() {
   const [authLoading,setAuthLoading] = useState(false);
   const [adminPwd,setAdminPwd] = useState("");
   const [pwdError,setPwdError] = useState("");
-  const [adminTab,setAdminTab] = useState("dashboard");
+  const [adminTab,setAdminTab] = useState(()=>{ try{return sessionStorage.getItem('c35_tab')||"dashboard";}catch{return "dashboard";} });
+  useEffect(()=>{ try{sessionStorage.setItem('c35_tab',adminTab);}catch{} },[adminTab]);
   const [calView,setCalView] = useState("mes");       // unified Calendario hub: "mes" (month grid) | "precios" (per-night grid)
   const [resSearch,setResSearch] = useState("");        // search across ALL reservations from the Calendario hub
+  const [gridVersion,setGridVersion] = useState(0);   // bumped on room_nights realtime change → forces the price grid to reload live
   const [channelBlocks,setChannelBlocks] = useState(()=>new Set());  // `${roomId}|YYYY-MM-DD` imported from Airbnb/Booking iCal
   const [channelFeeds,setChannelFeeds] = useState([]);               // configured channel_calendars rows
   const [feedForm,setFeedForm] = useState({room_id:"",source:"airbnb",ics_url:"",label:""});
@@ -873,8 +875,19 @@ export default function App() {
       })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"bookings"},p=>{
         const r=p.new;
-        setBookings(prev=>prev.map(b=>b.id===r.id?{...b,status:r.status,paid:r.paid,notes:r.notes}:b));
+        setBookings(prev=>prev.map(b=>b.id===r.id?mapRow(r):b));
       })
+      .on("postgres_changes",{event:"DELETE",schema:"public",table:"bookings"},p=>{
+        setBookings(prev=>prev.filter(b=>b.id!==p.old?.id));
+      })
+      // Live everything: one admin's edit shows on another admin's screen instantly (no refresh).
+      .on("postgres_changes",{event:"*",schema:"public",table:"rooms"},()=>{fetchRoomPrices();fetchRoomAvailability();})
+      .on("postgres_changes",{event:"*",schema:"public",table:"messages"},()=>fetchMessages())
+      .on("postgres_changes",{event:"*",schema:"public",table:"expenses"},()=>fetchExpenses())
+      .on("postgres_changes",{event:"*",schema:"public",table:"discounts"},()=>fetchDiscounts())
+      .on("postgres_changes",{event:"*",schema:"public",table:"settings"},()=>fetchSettings())
+      .on("postgres_changes",{event:"*",schema:"public",table:"channel_blocks"},()=>fetchChannels())
+      .on("postgres_changes",{event:"*",schema:"public",table:"room_nights"},()=>setGridVersion(v=>v+1))
       .subscribe();
     return()=>supabase.removeChannel(ch);
   },[adminAuth]);
@@ -1601,7 +1614,7 @@ export default function App() {
 
             {calView==="precios"&&(<div>
               <p style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".74rem",marginTop:0,marginBottom:"1.1rem"}}>Precio de cada noche. Clic en una celda para esa noche, o usa "Editar en bloque" para un rango. Las tarifas temporales aparecen en azul.</p>
-              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} seasons={seasons} channelBlocks={channelBlocks} />
+              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} seasons={seasons} channelBlocks={channelBlocks} refreshKey={gridVersion} />
             </div>)}
           </div>)}
 
