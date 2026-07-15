@@ -572,13 +572,17 @@ export default function App() {
   const showToast = (msg) => { setToast(msg); setTimeout(()=>setToast(""),3200); };
 
   // Derived
-  const confirmed = bookings.filter(b=>b.status==="confirmed"||b.status==="checked_in");
+  // Revenue-earning statuses: a completed (finalizada) stay still earned money, so it MUST count.
+  // Before this, only confirmed/checked_in counted — so every checked-out stay vanished from analytics.
+  const REV_STATUSES = ["confirmed","checked_in","finalizada"];
+  const isRev = b => REV_STATUSES.includes(b.status);
+  const confirmed = bookings.filter(isRev);
   const totalRev = confirmed.reduce((s,b)=>s+b.total,0);
   const totalExp = expenses.reduce((s,e)=>s+e.amount,0);
   const netRev = totalRev-totalExp;
   const pendingCnt = bookings.filter(b=>b.status==="pending").length;
   const unreadCnt = messages.filter(m=>!m.read).length;
-  const occupiedToday = bookings.filter(b=>(b.status==="confirmed"||b.status==="checked_in")&&b.checkIn<=TODAY&&b.checkOut>TODAY).length;
+  const occupiedToday = bookings.filter(b=>isRev(b)&&b.checkIn<=TODAY&&b.checkOut>TODAY).length;
   const unpaid = confirmed.filter(b=>!b.paid).reduce((s,b)=>s+b.total,0);
 
   // Calendar helpers
@@ -1259,7 +1263,7 @@ export default function App() {
           {/* ── DASHBOARD ── */}
           {adminTab==="dashboard"&&(<div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(148px,1fr))",gap:"1rem",marginBottom:"1.75rem"}} className="mob-2col">
-              {[[fmtMoney(totalRev),"Ingresos Brutos",C.warm],[fmtMoney(netRev),"Beneficio Neto",netRev>=0?C.olive:C.danger],[`${occupiedToday}/${rooms.length}`,"Ocupación Hoy","#1565C0"],[pendingCnt,"Por Confirmar",C.warning],[fmtMoney(unpaid),"Por Cobrar",unpaid>0?C.danger:C.olive],[bookings.filter(b=>b.source==="Direct"&&b.status==="confirmed").length,"Directas",C.olive]].map(([v,l,col])=>(
+              {[[fmtMoney(totalRev),"Ingresos Brutos",C.warm],[fmtMoney(netRev),"Beneficio Neto",netRev>=0?C.olive:C.danger],[`${occupiedToday}/${rooms.length}`,"Ocupación Hoy","#1565C0"],[pendingCnt,"Por Confirmar",C.warning],[fmtMoney(unpaid),"Por Cobrar",unpaid>0?C.danger:C.olive],[bookings.filter(b=>b.source==="Direct"&&isRev(b)).length,"Directas",C.olive]].map(([v,l,col])=>(
                 <div key={l} className="stat" style={{borderTopColor:col}}><div className="stat-v" style={{color:col}}>{v}</div><div className="stat-l">{l}</div></div>
               ))}
             </div>
@@ -1283,9 +1287,9 @@ export default function App() {
                   <button className="btn-sm-o" onClick={()=>setAdminTab("rooms")}>Gestionar</button>
                 </div>
                 {rooms.map(rm=>{
-                  const ab=bookings.find(b=>b.room===rm.id&&b.status==="confirmed"&&b.checkIn<=TODAY&&b.checkOut>TODAY);
-                  const ci=bookings.find(b=>b.room===rm.id&&b.status==="confirmed"&&b.checkIn===TODAY);
-                  const co=bookings.find(b=>b.room===rm.id&&b.status==="confirmed"&&b.checkOut===TODAY);
+                  const ab=bookings.find(b=>b.room===rm.id&&isRev(b)&&b.checkIn<=TODAY&&b.checkOut>TODAY);
+                  const ci=bookings.find(b=>b.room===rm.id&&isRev(b)&&b.checkIn===TODAY);
+                  const co=bookings.find(b=>b.room===rm.id&&isRev(b)&&b.checkOut===TODAY);
                   return(
                     <div key={rm.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:".52rem 0",borderBottom:`1px solid ${C.smoke}`}}>
                       <div style={{display:"flex",alignItems:"center",gap:".6rem"}}>
@@ -1377,9 +1381,9 @@ export default function App() {
               </table>
             </div>
             <div style={{background:C.white,padding:".9rem 1.5rem",borderTop:`2px solid ${C.gold}`,display:"flex",gap:"2rem",fontFamily:"'Lato',sans-serif",fontSize:".8rem",flexWrap:"wrap"}}>
-              <span>Total: <strong style={{color:C.warm}}>{fmtMoney(filtB.filter(b=>b.status==="confirmed").reduce((s,b)=>s+b.total,0))}</strong></span>
+              <span>Total: <strong style={{color:C.warm}}>{fmtMoney(filtB.filter(isRev).reduce((s,b)=>s+b.total,0))}</strong></span>
               <span>Pagado: <strong style={{color:C.success}}>{fmtMoney(filtB.filter(b=>b.paid).reduce((s,b)=>s+b.total,0))}</strong></span>
-              <span>Por pagar: <strong style={{color:C.danger}}>{fmtMoney(filtB.filter(b=>!b.paid&&b.status==="confirmed").reduce((s,b)=>s+b.total,0))}</strong></span>
+              <span>Por pagar: <strong style={{color:C.danger}}>{fmtMoney(filtB.filter(b=>!b.paid&&isRev(b)).reduce((s,b)=>s+b.total,0))}</strong></span>
             </div>
           </div>)}
 
@@ -1529,9 +1533,9 @@ export default function App() {
           {adminTab==="rooms"&&(<div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"1.25rem"}}>
               {rooms.map(rm=>{
-                const rev=bookings.filter(b=>b.room===rm.id&&b.status==="confirmed").reduce((s,b)=>s+b.total,0);
-                const ab=bookings.find(b=>b.room===rm.id&&b.status==="confirmed"&&b.checkIn<=TODAY&&b.checkOut>TODAY);
-                const upcoming=bookings.filter(b=>b.room===rm.id&&b.status==="confirmed"&&b.checkIn>TODAY).length;
+                const rev=bookings.filter(b=>b.room===rm.id&&isRev(b)).reduce((s,b)=>s+b.total,0);
+                const ab=bookings.find(b=>b.room===rm.id&&isRev(b)&&b.checkIn<=TODAY&&b.checkOut>TODAY);
+                const upcoming=bookings.filter(b=>b.room===rm.id&&isRev(b)&&b.checkIn>TODAY).length;
                 return(
                   <div key={rm.id} className="card" style={{overflow:"hidden"}}>
                     <div style={{height:130,position:"relative",overflow:"hidden"}}>
@@ -1668,8 +1672,8 @@ export default function App() {
               <div className="card" style={{padding:"1.4rem"}}>
                 <h3 style={{fontFamily:"'Lato',sans-serif",fontSize:".77rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,marginBottom:"1.25rem"}}>Ingresos por Habitación</h3>
                 {rooms.map((rm,ri)=>{
-                  const rev=bookings.filter(b=>b.room===rm.id&&b.status==="confirmed").reduce((s,b)=>s+b.total,0);
-                  const maxRev=Math.max(...rooms.map(r=>bookings.filter(b=>b.room===r.id&&b.status==="confirmed").reduce((s,b)=>s+b.total,0)),1);
+                  const rev=bookings.filter(b=>b.room===rm.id&&isRev(b)).reduce((s,b)=>s+b.total,0);
+                  const maxRev=Math.max(...rooms.map(r=>bookings.filter(b=>b.room===r.id&&isRev(b)).reduce((s,b)=>s+b.total,0)),1);
                   return(
                     <div key={rm.id} style={{marginBottom:".9rem"}}>
                       <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lato',sans-serif",fontSize:".79rem",marginBottom:".22rem"}}>
@@ -1718,7 +1722,7 @@ export default function App() {
           {/* ── ANALYTICS ── */}
           {adminTab==="analytics"&&(<div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(148px,1fr))",gap:"1rem",marginBottom:"1.75rem"}}>
-              {[[fmtMoney(totalRev),"Ingresos",C.warm],[Math.round((occupiedToday/rooms.length)*100)+"%","Ocup. Hoy",C.olive],[fmtMoney(confirmed.length?Math.round(totalRev/confirmed.reduce((s,b)=>s+nights(b.checkIn,b.checkOut),0)):0),"Tarifa Media/Noche",C.gold],[bookings.filter(b=>b.source==="Direct").length,"Reservas Directas",C.mahogany],[fmtMoney(Math.round(bookings.filter(b=>b.source!=="Direct"&&b.status==="confirmed").reduce((s,b)=>s+b.total*.175,0))),"Comisiones",C.danger],[reviews.filter(r=>r.approved).length+"",`Reseñas (${(reviews.reduce((s,r)=>s+r.rating,0)/Math.max(reviews.length,1)).toFixed(1)}⭐)`,C.gold]].map(([v,l,col])=>(
+              {[[fmtMoney(totalRev),"Ingresos",C.warm],[Math.round((occupiedToday/rooms.length)*100)+"%","Ocup. Hoy",C.olive],[fmtMoney(confirmed.length?Math.round(totalRev/confirmed.reduce((s,b)=>s+nights(b.checkIn,b.checkOut),0)):0),"Tarifa Media/Noche",C.gold],[bookings.filter(b=>b.source==="Direct").length,"Reservas Directas",C.mahogany],[fmtMoney(Math.round(bookings.filter(b=>b.source!=="Direct"&&isRev(b)).reduce((s,b)=>s+b.total*.175,0))),"Comisiones",C.danger],[reviews.filter(r=>r.approved).length+"",`Reseñas (${(reviews.reduce((s,r)=>s+r.rating,0)/Math.max(reviews.length,1)).toFixed(1)}⭐)`,C.gold]].map(([v,l,col])=>(
                 <div key={l} className="stat" style={{borderTopColor:col}}><div className="stat-v" style={{color:col,fontSize:"1.55rem"}}>{v}</div><div className="stat-l">{l}</div></div>
               ))}
             </div>
@@ -1726,9 +1730,9 @@ export default function App() {
               <div className="card" style={{padding:"1.5rem"}}>
                 <h3 style={{fontFamily:"'Lato',sans-serif",fontSize:".77rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,marginBottom:"1.4rem"}}>Canales de Reserva</h3>
                 {[["Direct",C.warm],["Airbnb","#FF5A5F"],["Booking.com","#003580"]].map(([src,col])=>{
-                  const cnt=bookings.filter(b=>b.source===src&&b.status==="confirmed").length;
-                  const rev=bookings.filter(b=>b.source===src&&b.status==="confirmed").reduce((s,b)=>s+b.total,0);
-                  const pct=bookings.filter(b=>b.status==="confirmed").length?Math.round((cnt/bookings.filter(b=>b.status==="confirmed").length)*100):0;
+                  const cnt=bookings.filter(b=>b.source===src&&isRev(b)).length;
+                  const rev=bookings.filter(b=>b.source===src&&isRev(b)).reduce((s,b)=>s+b.total,0);
+                  const pct=bookings.filter(isRev).length?Math.round((cnt/bookings.filter(isRev).length)*100):0;
                   return(
                     <div key={src} style={{marginBottom:"1.1rem"}}>
                       <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lato',sans-serif",fontSize:".8rem",marginBottom:".28rem"}}>
@@ -1740,14 +1744,14 @@ export default function App() {
                   );
                 })}
                 <div style={{marginTop:"1.4rem",padding:".9rem 1.1rem",background:C.smoke,borderLeft:`3px solid ${C.gold}`}}>
-                  <p style={{fontFamily:"'Lato',sans-serif",fontSize:".79rem",color:C.warm,lineHeight:1.65}}>Reservas directas ahorran comisiones estimadas de <strong>{fmtMoney(Math.round(bookings.filter(b=>b.source!=="Direct"&&b.status==="confirmed").reduce((s,b)=>s+b.total*.175,0)))}</strong>.</p>
+                  <p style={{fontFamily:"'Lato',sans-serif",fontSize:".79rem",color:C.warm,lineHeight:1.65}}>Reservas directas ahorran comisiones estimadas de <strong>{fmtMoney(Math.round(bookings.filter(b=>b.source!=="Direct"&&isRev(b)).reduce((s,b)=>s+b.total*.175,0)))}</strong>.</p>
                 </div>
               </div>
               <div className="card" style={{padding:"1.5rem"}}>
                 <h3 style={{fontFamily:"'Lato',sans-serif",fontSize:".77rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,marginBottom:"1.4rem"}}>Ingresos por Habitación</h3>
                 {rooms.map((rm,ri)=>{
-                  const rev=bookings.filter(b=>b.room===rm.id&&b.status==="confirmed").reduce((s,b)=>s+b.total,0);
-                  const maxRev=Math.max(...rooms.map(r=>bookings.filter(b=>b.room===r.id&&b.status==="confirmed").reduce((s,b)=>s+b.total,0)),1);
+                  const rev=bookings.filter(b=>b.room===rm.id&&isRev(b)).reduce((s,b)=>s+b.total,0);
+                  const maxRev=Math.max(...rooms.map(r=>bookings.filter(b=>b.room===r.id&&isRev(b)).reduce((s,b)=>s+b.total,0)),1);
                   return(<div key={rm.id} style={{marginBottom:"1rem"}}><div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lato',sans-serif",fontSize:".79rem",marginBottom:".24rem"}}><span style={{color:C.ebony}}>{rm.name}</span><span style={{color:C.warm,fontWeight:700}}>{fmtMoney(rev)}</span></div><div style={{background:C.parchment,height:9}}><div style={{background:ROOM_COLORS[ri%ROOM_COLORS.length],width:`${rev?(rev/maxRev)*100:0}%`,height:"100%"}}/></div></div>);
                 })}
               </div>
