@@ -67,3 +67,14 @@ drop policy if exists "discounts read"      on public.discounts;
 create policy "discounts read"      on public.discounts for select using (true);
 drop policy if exists "discounts admin all" on public.discounts;
 create policy "discounts admin all" on public.discounts for all to authenticated using (true) with check (true);
+
+-- ── 6) ROOMS: editable content columns (name/beds/size/guests/amenities/description) ──────────────────────
+--     The admin room-editor form exposed these fields but only price+available were persisted, so edits like
+--     "30m²" reverted on refresh. null = inherit the app's built-in default for that room. Applied 2026-07-15.
+alter table public.rooms add column if not exists name        text;
+alter table public.rooms add column if not exists name_en     text;
+alter table public.rooms add column if not exists beds        text;
+alter table public.rooms add column if not exists guests      int;
+alter table public.rooms add column if not exists size        text;
+alter table public.rooms add column if not exists description text;
+alter table public.rooms add column if not exists amenities   jsonb;

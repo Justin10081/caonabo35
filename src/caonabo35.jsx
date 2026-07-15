@@ -459,6 +459,8 @@ export default function App() {
   const [adminPwd,setAdminPwd] = useState("");
   const [pwdError,setPwdError] = useState("");
   const [adminTab,setAdminTab] = useState("dashboard");
+  const [calView,setCalView] = useState("mes");       // unified Calendario hub: "mes" (month grid) | "precios" (per-night grid)
+  const [resSearch,setResSearch] = useState("");        // search across ALL reservations from the Calendario hub
   const [toast,setToast] = useState("");
 
   // Data
@@ -654,19 +656,33 @@ export default function App() {
     await supabase.from('discounts').update({active}).eq('id',id);
   }
   async function fetchRoomPrices() {
-    const {data,error} = await supabase.from('rooms').select('id,price_override,discount');
+    const {data,error} = await supabase.from('rooms').select('id,price_override,discount,name,name_en,beds,guests,size,description,amenities');
     if(error||!data) return;
     const overrides = {};
     const discMap = {};
+    const byId = {};
     data.forEach(row => {
+      byId[String(row.id)] = row;
       if(row.price_override!=null) overrides[row.id] = row.price_override;
       if(row.discount!=null) discMap[row.id] = row.discount;
     });
-    setRooms(prev=>prev.map(r=>({
-      ...r,
-      price: overrides[r.id]!=null ? Number(overrides[r.id]) : r.price,
-      discount: discMap[r.id]!=null ? Number(discMap[r.id]) : r.discount,
-    })));
+    setRooms(prev=>prev.map(r=>{
+      const row = byId[String(r.id)];
+      if(!row) return r;
+      // DB is the source of truth for editable content; fall back to the built-in default when a column is null
+      return {
+        ...r,
+        price:     row.price_override!=null ? Number(row.price_override) : r.price,
+        discount:  row.discount!=null ? Number(row.discount) : r.discount,
+        name:      row.name ?? r.name,
+        nameEn:    row.name_en ?? r.nameEn,
+        beds:      row.beds ?? r.beds,
+        guests:    row.guests!=null ? Number(row.guests) : r.guests,
+        size:      row.size ?? r.size,
+        desc:      row.description ?? r.desc,
+        amenities: Array.isArray(row.amenities) ? row.amenities : r.amenities,
+      };
+    }));
     setRoomPriceOverrides(overrides);
     // Sync localStorage cache
     try { localStorage.setItem('c35_prices', JSON.stringify(overrides)); } catch(e){}
@@ -940,8 +956,20 @@ export default function App() {
   }
 
   async function saveRoom(){
-    // Save price AND availability (the modal's availability radio was never persisted), error-checked first.
-    const {error} = await supabase.from('rooms').upsert({id:editRoomD.id, price_override:editRoomD.price, available:editRoomD.available},{onConflict:'id'});
+    // Persist price, availability AND the editable content (name/beds/size/guests/amenities/description).
+    // Before this, only price+available were saved, so size/beds/etc. reverted on refresh (dad's bug).
+    const {error} = await supabase.from('rooms').upsert({
+      id: String(editRoomD.id),
+      price_override: editRoomD.price,
+      available: editRoomD.available,
+      name: editRoomD.name,
+      name_en: editRoomD.nameEn,
+      beds: editRoomD.beds,
+      guests: editRoomD.guests,
+      size: editRoomD.size,
+      description: editRoomD.desc,
+      amenities: editRoomD.amenities,
+    },{onConflict:'id'});
     if(error){ showToast("❌ Error al guardar: "+error.message); return; }
     const updated = rooms.map(r=>r.id===editRoomD.id?editRoomD:r);
     setRooms(updated);
@@ -1150,7 +1178,6 @@ export default function App() {
       ["dashboard","📊 Dashboard"],
       ["bookings",`📋 Reservas${pendingCnt>0?` (${pendingCnt})`:""}`],
       ["calendar","📅 Calendario"],
-      ["pricegrid","🗓️ Multicalendario"],
       ["rooms","🏠 Habitaciones"],
       ["messages",`💬 Mensajes${unreadCnt>0?` (${unreadCnt})`:""}`],
       ["finances","💰 Finanzas"],
@@ -1333,6 +1360,76 @@ export default function App() {
 
           {/* ── CALENDAR — single month with nav ── */}
           {adminTab==="calendar"&&(<div>
+            {/* Today's activity — arrivals / departures / in-house, always visible */}
+            {(()=>{
+              const active=bookings.filter(b=>b.status!=="cancelled");
+              const rn=id=>rooms.find(r=>r.id===id)?.name||("Hab. "+id);
+              const cols=[
+                ["Llegadas hoy","#2e7d32",active.filter(b=>b.checkIn===TODAY),"Sin llegadas"],
+                ["Salidas hoy","#c62828",active.filter(b=>b.checkOut===TODAY),"Sin salidas"],
+                ["En hotel ahora","#1565C0",active.filter(b=>b.checkIn<=TODAY&&b.checkOut>TODAY),"Sin huéspedes"],
+              ];
+              return(
+                <div style={{marginBottom:"1.3rem"}}>
+                  <h3 style={{fontFamily:"'Lato',sans-serif",fontSize:".75rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,margin:"0 0 .7rem"}}>Hoy · {TODAY}</h3>
+                  <div style={{display:"flex",gap:".8rem",flexWrap:"wrap"}}>
+                    {cols.map(([title,color,list,empty])=>(
+                      <div key={title} style={{flex:"1 1 200px",minWidth:190,background:C.white,border:`1px solid ${C.parchment}`,borderTop:`3px solid ${color}`,borderRadius:6,padding:".9rem 1rem"}}>
+                        <div style={{fontFamily:"'Lato',sans-serif",fontSize:".64rem",letterSpacing:".1em",textTransform:"uppercase",color,fontWeight:700,marginBottom:".6rem"}}>{title} ({list.length})</div>
+                        {list.length===0?<div style={{fontSize:".76rem",color:C.taupe,fontStyle:"italic"}}>{empty}</div>:list.map(b=>(
+                          <div key={b.id} onClick={()=>setDetailB(b)} style={{display:"flex",justifyContent:"space-between",gap:".5rem",padding:".32rem 0",borderBottom:`1px solid ${C.smoke}`,cursor:"pointer",fontSize:".78rem"}}>
+                            <span style={{color:C.ebony,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.guest}</span>
+                            <span style={{color:C.taupe,whiteSpace:"nowrap"}}>{rn(b.room)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Search across ALL reservations (past + present) */}
+            <div style={{marginBottom:"1.2rem"}}>
+              <input className="inp" placeholder="🔎 Buscar todas las reservas: nombre, email, teléfono, habitación, fecha, estado..." value={resSearch} onChange={e=>setResSearch(e.target.value)} style={{maxWidth:580}}/>
+              {resSearch.trim()&&(()=>{
+                const q=resSearch.trim().toLowerCase();
+                const rn=id=>rooms.find(r=>r.id===id)?.name||"";
+                const hits=bookings.filter(b=>[b.guest,b.email,b.phone,rn(b.room),b.checkIn,b.checkOut,b.status,b.source,b.total,b.id].some(f=>String(f??"").toLowerCase().includes(q)));
+                return(
+                  <div className="card" style={{marginTop:".7rem",overflowX:"auto"}}>
+                    <div style={{padding:".5rem .85rem",fontFamily:"'Lato',sans-serif",fontSize:".7rem",color:C.taupe,borderBottom:`1px solid ${C.parchment}`}}>{hits.length} resultado{hits.length!==1?"s":""}</div>
+                    {hits.length===0?<div style={{padding:"1rem",color:C.taupe,fontSize:".8rem"}}>Sin coincidencias.</div>:
+                    <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Lato',sans-serif",fontSize:".76rem"}}>
+                      <thead><tr>{["#","Huésped","Contacto","Habitación","Entrada","Salida","Total","Estado"].map(h=><th key={h} style={{background:C.ebony,color:C.parchment,padding:".5rem .7rem",textAlign:"left",fontSize:".57rem",letterSpacing:".08em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {hits.map((b,i)=>(
+                          <tr key={b.id} className="tr" onClick={()=>setDetailB(b)} style={{background:i%2?C.smoke:C.white,cursor:"pointer"}}>
+                            <td style={{padding:".45rem .7rem",color:C.taupe,whiteSpace:"nowrap"}}>#{b.id}</td>
+                            <td style={{padding:".45rem .7rem",fontWeight:700,color:C.ebony,whiteSpace:"nowrap"}}>{b.guest}</td>
+                            <td style={{padding:".45rem .7rem",color:C.taupe,fontSize:".7rem"}}>{b.email}<br/>{b.phone}</td>
+                            <td style={{padding:".45rem .7rem",color:C.ebony,whiteSpace:"nowrap"}}>{rn(b.room)}</td>
+                            <td style={{padding:".45rem .7rem",whiteSpace:"nowrap"}}>{b.checkIn}</td>
+                            <td style={{padding:".45rem .7rem",whiteSpace:"nowrap"}}>{b.checkOut}</td>
+                            <td style={{padding:".45rem .7rem",fontWeight:700,color:C.warm,whiteSpace:"nowrap"}}>{fmtMoney(b.total)}</td>
+                            <td style={{padding:".45rem .7rem"}}><Bdg s={b.status}/></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* View toggle: month calendar vs per-night price grid */}
+            <div style={{display:"flex",gap:".4rem",marginBottom:"1.2rem",flexWrap:"wrap"}}>
+              {[["mes","📅 Calendario del mes"],["precios","💲 Precios por noche"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setCalView(v)} className={`tog${calView===v?" act":""}`}>{l}</button>
+              ))}
+            </div>
+
+            {calView==="mes"&&(<>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem",flexWrap:"wrap",gap:".75rem"}}>
               <div style={{display:"flex",alignItems:"center",gap:"1rem"}}>
                 <button className="btn-sm-o" style={{padding:".42rem .85rem"}} onClick={calNavPrev}>←</button>
@@ -1409,12 +1506,12 @@ export default function App() {
                 );
               })}
             </div>
-          </div>)}
+            </>)}
 
-          {/* ── MULTICALENDAR (Airbnb-style per-night pricing grid) ── */}
-          {adminTab==="pricegrid"&&(<div>
-            <p style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".72rem",marginTop:0,marginBottom:"1.1rem"}}>Precio y disponibilidad por noche, como en Airbnb. Clic en una celda para esa noche, o usa "Editar en bloque" para un rango.</p>
-            <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} />
+            {calView==="precios"&&(<div>
+              <p style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".72rem",marginTop:0,marginBottom:"1.1rem"}}>Precio y disponibilidad por noche, como en Airbnb. Clic en una celda para esa noche, o usa "Editar en bloque" para un rango.</p>
+              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} />
+            </div>)}
           </div>)}
 
           {/* ── ROOMS ── */}
