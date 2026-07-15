@@ -773,12 +773,17 @@ export default function App() {
     return()=>supabase.removeChannel(ch);
   },[adminAuth]);
 
-  // ─── Polling fallback: sync bookings every 15s when admin is logged in ──
+  // ─── Polling fallback: sync bookings when admin is logged in.
+  //     Realtime handles instant updates; this is the safety net. It SKIPS while the
+  //     tab is hidden — a backgrounded admin tab polling every 15s was starving the
+  //     free-tier DB compute — and does one immediate sync when the tab regains focus. ──
   useEffect(()=>{
     if(!adminAuth) return;
-    const poll = setInterval(async()=>{
+    let alive = true;
+    const syncBookings = async()=>{
+      if(document.visibilityState!=="visible") return;   // don't hammer the DB in the background
       const{data}=await supabase.from("bookings").select("*").order("created_at",{ascending:false});
-      if(!data) return;
+      if(!data||!alive) return;
       const mapped = data.map(r=>({
         id:r.id,guest:r.guest,email:r.email,phone:r.phone,
         room:r.room,checkIn:r.check_in,checkOut:r.check_out,
@@ -794,8 +799,11 @@ export default function App() {
         if(hasNew||hasUpdate) return mapped;
         return prev;
       });
-    }, 15000);
-    return()=>clearInterval(poll);
+    };
+    const poll = setInterval(syncBookings, 30000);
+    const onVis = ()=>{ if(document.visibilityState==="visible") syncBookings(); };
+    document.addEventListener("visibilitychange", onVis);
+    return()=>{ alive=false; clearInterval(poll); document.removeEventListener("visibilitychange", onVis); };
   },[adminAuth]);
 
   async function adminLogin(){
