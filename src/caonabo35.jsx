@@ -198,6 +198,21 @@ function hasConflict(bookings, roomId, checkIn, checkOut, excludeId=null) {
   });
 }
 
+// True if any night in [checkIn, checkOut) is blocked by an imported OTA (Airbnb/Booking) calendar.
+// blockSet holds `${roomId}|${YYYY-MM-DD}` keys loaded from channel_blocks.
+function channelConflict(blockSet, roomId, checkIn, checkOut) {
+  if(!blockSet || !blockSet.size || !checkIn || !checkOut) return false;
+  const pad=n=>String(n).padStart(2,'0');
+  const d=new Date(checkIn+"T00:00:00"), stop=new Date(checkOut+"T00:00:00");
+  let g=0;
+  while(d<stop && g++<800){
+    const ymd=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    if(blockSet.has(`${String(roomId)}|${ymd}`)) return true;
+    d.setDate(d.getDate()+1);
+  }
+  return false;
+}
+
 // ─── Price breakdown helper ───────────────────────────────────────────
 // Returns the effective nightly rate for one date, honoring (1) explicit date-range temporary
 // rates (his dad's "set a price for these dates" — auto-expires because a past range can't match
@@ -483,6 +498,10 @@ export default function App() {
   const [adminTab,setAdminTab] = useState("dashboard");
   const [calView,setCalView] = useState("mes");       // unified Calendario hub: "mes" (month grid) | "precios" (per-night grid)
   const [resSearch,setResSearch] = useState("");        // search across ALL reservations from the Calendario hub
+  const [channelBlocks,setChannelBlocks] = useState(()=>new Set());  // `${roomId}|YYYY-MM-DD` imported from Airbnb/Booking iCal
+  const [channelFeeds,setChannelFeeds] = useState([]);               // configured channel_calendars rows
+  const [feedForm,setFeedForm] = useState({room_id:"",source:"airbnb",ics_url:"",label:""});
+  const [syncing,setSyncing] = useState(false);
   const [toast,setToast] = useState("");
 
   // Data
@@ -617,7 +636,50 @@ export default function App() {
     fetchRoomAvailability();
     fetchMessages();
     fetchSettings();
+    fetchChannels();
   },[]);
+
+  // ─── Channel calendar sync (Airbnb / Booking.com iCal import) ───
+  async function fetchChannels(){
+    const [{data:feeds},{data:blocks}] = await Promise.all([
+      supabase.from('channel_calendars').select('*').order('created_at',{ascending:true}),
+      supabase.from('channel_blocks').select('room_id,date,source'),
+    ]);
+    if(feeds) setChannelFeeds(feeds);
+    if(blocks) setChannelBlocks(new Set(blocks.map(b=>`${String(b.room_id)}|${b.date}`)));
+  }
+  async function syncChannels(silent=false){
+    setSyncing(true);
+    try{
+      const {data:{session}} = await supabase.auth.getSession();
+      const res = await fetch('/api/sync-calendars',{method:'POST',headers:session?.access_token?{Authorization:`Bearer ${session.access_token}`}:{}});
+      const j = await res.json().catch(()=>({}));
+      await fetchChannels();
+      if(!silent){ if(res.ok) showToast(`Sincronizado ✓ ${j.blocks??0} noche(s) de otros canales`); else showToast('❌ '+(j.error||'Error al sincronizar')); }
+    }catch(e){ if(!silent) showToast('❌ '+e.message); }
+    setSyncing(false);
+  }
+  // Refresh OTA blocks in the background whenever the admin opens the panel.
+  useEffect(()=>{ if(adminAuth) syncChannels(true); },[adminAuth]);
+  async function addFeed(){
+    if(!feedForm.ics_url.trim()){showToast("Pega el enlace iCal del canal");return;}
+    const label = feedForm.label.trim() || (feedForm.source==='airbnb'?'Airbnb':feedForm.source==='booking'?'Booking.com':'Canal');
+    const {error} = await supabase.from('channel_calendars').insert([{room_id:feedForm.room_id||null,source:feedForm.source,ics_url:feedForm.ics_url.trim(),label}]);
+    if(error){showToast("❌ "+error.message);return;}
+    setFeedForm({room_id:"",source:"airbnb",ics_url:"",label:""});
+    await fetchChannels();
+    showToast("Calendario añadido ✓ — sincronizando…");
+    syncChannels();
+  }
+  async function deleteFeed(feed){
+    let q = supabase.from('channel_blocks').delete().eq('source',feed.source);
+    if(feed.room_id) q = q.eq('room_id',feed.room_id);
+    await q;
+    const {error} = await supabase.from('channel_calendars').delete().eq('id',feed.id);
+    if(error){showToast("❌ "+error.message);return;}
+    await fetchChannels();
+    showToast("Calendario eliminado");
+  }
 
   // ─── Fetch messages from Supabase on mount ───────────────────────
   async function fetchMessages(){
@@ -900,7 +962,7 @@ export default function App() {
     if(!bookForm.idPhotoFile){setBookError(t("Por favor sube una foto de tu cédula o pasaporte.","Please upload a photo of your ID or passport."));return;}
     if(!bookForm.checkIn||!bookForm.checkOut){setBookError(t("Por favor selecciona fechas.","Please select dates."));return;}
     if(bookForm.checkIn>=bookForm.checkOut){setBookError(t("La salida debe ser después de la entrada.","Check-out must be after check-in."));return;}
-    if(hasConflict(bookings,selRoom,bookForm.checkIn,bookForm.checkOut)){
+    if(hasConflict(bookings,selRoom,bookForm.checkIn,bookForm.checkOut)||channelConflict(channelBlocks,selRoom,bookForm.checkIn,bookForm.checkOut)){
       setBookError(t("Lo sentimos, esa habitación no está disponible para las fechas seleccionadas. Por favor elige otras fechas.","Sorry, that room is not available for the selected dates. Please choose different dates."));
       return;
     }
@@ -947,8 +1009,8 @@ export default function App() {
   // ─── Admin booking save with conflict check ─────────────────────────
   async function saveBooking(b) {
     if(b.checkIn&&b.checkOut&&b.status!=="cancelled") {
-      if(hasConflict(bookings,b.room,b.checkIn,b.checkOut,b.id)){
-        setEditBError(t("Conflicto de fechas: esa habitación ya tiene una reserva en ese período.","Date conflict: that room already has a booking in that period."));
+      if(hasConflict(bookings,b.room,b.checkIn,b.checkOut,b.id)||channelConflict(channelBlocks,b.room,b.checkIn,b.checkOut)){
+        setEditBError(t("Conflicto de fechas: esa habitación ya tiene una reserva en ese período (incluye Airbnb/Booking).","Date conflict: that room already has a booking in that period (incl. Airbnb/Booking)."));
         return;
       }
     }
@@ -968,7 +1030,7 @@ export default function App() {
     if(!newB.guest.trim()){setNewBError("Nombre requerido.");return;}
     if(!newB.checkIn||!newB.checkOut){setNewBError("Fechas requeridas.");return;}
     if(newB.checkIn>=newB.checkOut){setNewBError("La salida debe ser después de la entrada.");return;}
-    if(newB.status!=="cancelled"&&hasConflict(bookings,newB.room,newB.checkIn,newB.checkOut)){
+    if(newB.status!=="cancelled"&&(hasConflict(bookings,newB.room,newB.checkIn,newB.checkOut)||channelConflict(channelBlocks,newB.room,newB.checkIn,newB.checkOut))){
       setNewBError("Conflicto de fechas: esa habitación ya tiene una reserva en ese período.");return;
     }
     const rm = rooms.find(r=>r.id===newB.room);
@@ -1539,7 +1601,7 @@ export default function App() {
 
             {calView==="precios"&&(<div>
               <p style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".74rem",marginTop:0,marginBottom:"1.1rem"}}>Precio de cada noche. Clic en una celda para esa noche, o usa "Editar en bloque" para un rango. Las tarifas temporales aparecen en azul.</p>
-              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} seasons={seasons} />
+              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} seasons={seasons} channelBlocks={channelBlocks} />
             </div>)}
           </div>)}
 
@@ -1825,6 +1887,32 @@ export default function App() {
                   })}
                 </div>
                 <p style={{fontFamily:"'Lato',sans-serif",fontSize:".74rem",color:C.taupe}}>Marca una habitación como CERRADA para mantenimiento o fuera de servicio. Los huéspedes no podrán reservarla.</p>
+              </div>
+
+              {/* ── Channel calendar sync (Airbnb / Booking.com iCal) ── */}
+              <div style={{marginTop:"2rem"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:".5rem",marginBottom:".35rem"}}>
+                  <p style={{fontFamily:"'Lato',sans-serif",fontSize:".77rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,margin:0}}>🔗 Sincronizar Airbnb / Booking.com</p>
+                  <button className="btn-sm" onClick={()=>syncChannels(false)} disabled={syncing}>{syncing?"Sincronizando…":"↻ Sincronizar ahora"}</button>
+                </div>
+                <p style={{fontFamily:"'Lato',sans-serif",fontSize:".74rem",color:C.taupe,marginBottom:"1rem"}}>Pega el enlace iCal de cada anuncio (en Airbnb: Calendario → Disponibilidad → Conectar con otro sitio web → Exportar calendario). Las fechas reservadas en esos canales se bloquean aquí automáticamente para evitar reservas dobles.{channelBlocks.size>0?` (${channelBlocks.size} noches importadas)`:""}</p>
+                {channelFeeds.length>0&&<div style={{display:"flex",flexDirection:"column",gap:".5rem",marginBottom:"1rem"}}>
+                  {channelFeeds.map(f=>(
+                    <div key={f.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:".5rem",padding:".65rem .85rem",background:C.smoke,border:`1px solid ${C.sand}`,borderRadius:4,fontFamily:"'Lato',sans-serif",fontSize:".8rem"}}>
+                      <div style={{minWidth:0}}>
+                        <div style={{fontWeight:700,color:C.ebony}}>{f.label} · {f.room_id?rooms.find(r=>String(r.id)===String(f.room_id))?.name||("Hab. "+f.room_id):"Todas las habitaciones"}</div>
+                        <div style={{color:C.taupe,fontSize:".7rem",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{f.last_status||"sin sincronizar aún"}{f.last_synced?` · ${new Date(f.last_synced).toLocaleString('es-DO')}`:""}</div>
+                      </div>
+                      <button className="btn-danger" style={{padding:".2rem .6rem",fontSize:".65rem",flexShrink:0}} onClick={()=>deleteFeed(f)}>✕</button>
+                    </div>
+                  ))}
+                </div>}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:".6rem"}}>
+                  <div><FL>Canal</FL><select className="sel" value={feedForm.source} onChange={e=>setFeedForm(p=>({...p,source:e.target.value}))}><option value="airbnb">Airbnb</option><option value="booking">Booking.com</option><option value="other">Otro</option></select></div>
+                  <div><FL>Habitación</FL><select className="sel" value={feedForm.room_id} onChange={e=>setFeedForm(p=>({...p,room_id:e.target.value}))}><option value="">Todas</option>{rooms.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+                  <div style={{gridColumn:"1/-1"}}><FL>Enlace iCal (.ics)</FL><Inp value={feedForm.ics_url} onChange={e=>setFeedForm(p=>({...p,ics_url:e.target.value}))} placeholder="https://www.airbnb.com/calendar/ical/....ics"/></div>
+                </div>
+                <button className="btn-gold" style={{marginTop:".7rem"}} onClick={addFeed}>+ Añadir calendario</button>
               </div>
             </div>
           </div>)}

@@ -8,7 +8,7 @@ const iso = (d) => d.toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const WD_ES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
-export default function MultiCalendar({ rooms = [], bookings = [], supabase, showToast, today, seasons = [] }) {
+export default function MultiCalendar({ rooms = [], bookings = [], supabase, showToast, today, seasons = [], channelBlocks = null }) {
   const [start, setStart] = useState(() => { const t = today ? new Date(today + "T00:00:00") : new Date(); t.setHours(0, 0, 0, 0); return t; });
   const [span, setSpan] = useState(14);
   const [nights, setNights] = useState({});            // `${roomId}|${date}` -> {price, available}
@@ -138,7 +138,8 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
               <tr key={room.id}>
                 <td style={nameCell}>{room.name}</td>
                 {dates.map(date => {
-                  const booked = bookedSet.has(`${room.id}|${date}`);
+                  const ota = channelBlocks && channelBlocks.has(`${room.id}|${date}`);
+                  const booked = bookedSet.has(`${room.id}|${date}`) || ota;
                   const blocked = isBlocked(room.id, date);
                   const custom = cell(room.id, date)?.price != null;
                   const seasonal = !custom && seasonalRate(room, date) != null;
@@ -146,9 +147,9 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
                   return (
                     <td key={date}
                       onClick={() => { if (booked) return; setSel({ roomId: room.id, date }); const c = cell(room.id, date); setDraft({ price: c?.price ?? "", available: c?.available !== false }); }}
-                      title={booked ? "Reservada" : blocked ? "Bloqueada" : "Clic para editar"}
+                      title={ota ? "Reservada en Airbnb/Booking" : booked ? "Reservada" : blocked ? "Bloqueada" : "Clic para editar"}
                       style={{ borderBottom: `1px solid ${LINE}`, borderRight: `1px solid #f3ece0`, textAlign: "center", padding: ".7rem .35rem", fontSize: ".9rem", cursor: booked ? "not-allowed" : "pointer", background: bg, color: booked ? "#90a4ae" : blocked ? "#B71C1C" : INK, fontWeight: (custom || seasonal) ? 700 : 400 }}>
-                      {booked ? "•" : blocked ? "—" : `$${effPrice(room, date)}`}
+                      {ota ? "⊗" : booked ? "•" : blocked ? "—" : `$${effPrice(room, date)}`}
                     </td>
                   );
                 })}
@@ -161,7 +162,8 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
         <span style={{ background: "#fff8ea", padding: "0 .3rem", border: `1px solid ${LINE}` }}>precio propio</span>{" "}
         <span style={{ background: "#eef5ff", padding: "0 .3rem", border: `1px solid ${LINE}` }}>tarifa temporal</span>{" "}
         <span style={{ background: "#fdecea", color: "#B71C1C", padding: "0 .3rem" }}>— bloqueada</span>{" "}
-        <span style={{ background: "#eceff1", color: "#90a4ae", padding: "0 .3rem" }}>• reservada</span>{" "}· clic en una celda para el precio de esa noche.
+        <span style={{ background: "#eceff1", color: "#90a4ae", padding: "0 .3rem" }}>• reservada</span>{" "}
+        <span style={{ background: "#eceff1", color: "#90a4ae", padding: "0 .3rem" }}>⊗ Airbnb/Booking</span>{" "}· clic en una celda para el precio de esa noche.
       </p>
 
       {/* single-cell popover */}
