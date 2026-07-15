@@ -32,6 +32,16 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: error.message });
   }
 
-  const bookedRooms = [...new Set((data || []).map(b => b.room))];
+  // Also treat rooms blocked by imported Airbnb/Booking.com calendars as unavailable.
+  const { data: blocks } = await supabase
+    .from('channel_blocks')
+    .select('room_id')
+    .gte('date', check_in)
+    .lt('date', check_out);
+
+  const bookedRooms = [...new Set([
+    ...(data || []).map(b => b.room),
+    ...(blocks || []).map(b => Number(b.room_id)),
+  ])];
   return res.status(200).json({ bookedRooms });
 }
