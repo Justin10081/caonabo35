@@ -14,8 +14,10 @@ create policy "Public can insert bookings" on public.bookings
   with check (status = 'pending' and coalesce(paid, false) = false);
 
 -- ── 2) MULTICALENDAR: per-night price + availability per room (the Airbnb grid needs a (room,date) grain) ──
+-- NOTE: rooms.id is TEXT in the live DB (values '1'..'7' plus legacy '201'..'208'),
+-- so room_id is text to match the FK. Applied to production 2026-07-15 via MCP.
 create table if not exists public.room_nights (
-  room_id    int  not null references public.rooms(id) on delete cascade,
+  room_id    text not null references public.rooms(id) on delete cascade,
   date       date not null,
   price      numeric,               -- null = inherit the room's base/override price
   available  boolean not null default true,
