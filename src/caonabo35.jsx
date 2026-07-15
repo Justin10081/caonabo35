@@ -605,6 +605,25 @@ export default function App() {
   const unreadCnt = messages.filter(m=>!m.read).length;
   const occupiedToday = bookings.filter(b=>isRev(b)&&b.checkIn<=TODAY&&b.checkOut>TODAY).length;
   const unpaid = confirmed.filter(b=>!b.paid).reduce((s,b)=>s+b.total,0);
+  // ── Owner KPIs: ADR (avg nightly rate), RevPAR (revenue per available room, trailing 30d), net-of-OTA-commission ──
+  const revNights = confirmed.reduce((s,b)=>s+nights(b.checkIn,b.checkOut),0);
+  const adr = revNights ? Math.round(totalRev/revNights) : 0;
+  const otaCommission = Math.round(bookings.filter(b=>b.source!=="Direct"&&isRev(b)).reduce((s,b)=>s+b.total*.175,0));
+  const netRevenue = totalRev - otaCommission;
+  const revpar30 = (()=>{
+    const days=30, avail=rooms.length*days; if(!avail) return 0;
+    const pad=n=>String(n).padStart(2,'0');
+    const start=new Date(TODAY+"T00:00:00"); start.setDate(start.getDate()-(days-1));
+    const win=new Set();
+    for(let i=0;i<days;i++){const d=new Date(start);d.setDate(d.getDate()+i);win.add(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`);}
+    let rev=0;
+    confirmed.forEach(b=>{
+      const n=nights(b.checkIn,b.checkOut); if(!n||!b.checkIn) return;
+      const rate=(b.total||0)/n; const d=new Date(b.checkIn+"T00:00:00");
+      for(let i=0;i<n;i++){const dd=new Date(d);dd.setDate(dd.getDate()+i);if(win.has(`${dd.getFullYear()}-${pad(dd.getMonth()+1)}-${pad(dd.getDate())}`))rev+=rate;}
+    });
+    return Math.round(rev/avail*100)/100;
+  })();
 
   // Calendar helpers
   const calNavPrev = () => { let m=calMonth-1,y=calYear; if(m<0){m=11;y--;} setCalMonth(m);setCalYear(y); };
@@ -1811,7 +1830,7 @@ export default function App() {
           {/* ── ANALYTICS ── */}
           {adminTab==="analytics"&&(<div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(148px,1fr))",gap:"1rem",marginBottom:"1.75rem"}}>
-              {[[fmtMoney(totalRev),"Ingresos",C.warm],[Math.round((occupiedToday/rooms.length)*100)+"%","Ocup. Hoy",C.olive],[fmtMoney(confirmed.length?Math.round(totalRev/confirmed.reduce((s,b)=>s+nights(b.checkIn,b.checkOut),0)):0),"Tarifa Media/Noche",C.gold],[bookings.filter(b=>b.source==="Direct").length,"Reservas Directas",C.mahogany],[fmtMoney(Math.round(bookings.filter(b=>b.source!=="Direct"&&isRev(b)).reduce((s,b)=>s+b.total*.175,0))),"Comisiones",C.danger],[reviews.filter(r=>r.approved).length+"",`Reseñas (${(reviews.reduce((s,r)=>s+r.rating,0)/Math.max(reviews.length,1)).toFixed(1)}⭐)`,C.gold]].map(([v,l,col])=>(
+              {[[fmtMoney(totalRev),"Ingresos",C.warm],[fmtMoney(netRevenue),"Ingreso Neto (post-comisión)",netRevenue>=0?C.olive:C.danger],[Math.round((occupiedToday/rooms.length)*100)+"%","Ocup. Hoy",C.olive],[fmtMoney(adr),"ADR · Tarifa Media",C.gold],[fmtMoney(revpar30),"RevPAR (30 días)",C.warm],[bookings.filter(b=>b.source==="Direct").length,"Reservas Directas",C.mahogany],[fmtMoney(otaCommission),"Comisiones OTA",C.danger],[reviews.filter(r=>r.approved).length+"",`Reseñas (${(reviews.reduce((s,r)=>s+r.rating,0)/Math.max(reviews.length,1)).toFixed(1)}⭐)`,C.gold]].map(([v,l,col])=>(
                 <div key={l} className="stat" style={{borderTopColor:col}}><div className="stat-v" style={{color:col,fontSize:"1.55rem"}}>{v}</div><div className="stat-l">{l}</div></div>
               ))}
             </div>
