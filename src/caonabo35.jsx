@@ -1202,6 +1202,7 @@ export default function App() {
       ["dashboard","📊 Dashboard"],
       ["bookings",`📋 Reservas${pendingCnt>0?` (${pendingCnt})`:""}`],
       ["calendar","📅 Calendario"],
+      ["precios","💲 Precios"],
       ["rooms","🏠 Habitaciones"],
       ["messages",`💬 Mensajes${unreadCnt>0?` (${unreadCnt})`:""}`],
       ["finances","💰 Finanzas"],
@@ -1446,14 +1447,6 @@ export default function App() {
               })()}
             </div>
 
-            {/* View toggle: month calendar vs per-night price grid */}
-            <div style={{display:"flex",gap:".4rem",marginBottom:"1.2rem",flexWrap:"wrap"}}>
-              {[["mes","📅 Calendario del mes"],["precios","💲 Precios por noche"]].map(([v,l])=>(
-                <button key={v} onClick={()=>setCalView(v)} className={`tog${calView===v?" act":""}`}>{l}</button>
-              ))}
-            </div>
-
-            {calView==="mes"&&(<>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem",flexWrap:"wrap",gap:".75rem"}}>
               <div style={{display:"flex",alignItems:"center",gap:"1rem"}}>
                 <button className="btn-sm-o" style={{padding:".42rem .85rem"}} onClick={calNavPrev}>←</button>
@@ -1530,12 +1523,6 @@ export default function App() {
                 );
               })}
             </div>
-            </>)}
-
-            {calView==="precios"&&(<div>
-              <p style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".72rem",marginTop:0,marginBottom:"1.1rem"}}>Precio y disponibilidad por noche, como en Airbnb. Clic en una celda para esa noche, o usa "Editar en bloque" para un rango.</p>
-              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} seasons={seasons} />
-            </div>)}
           </div>)}
 
           {/* ── ROOMS ── */}
@@ -1821,6 +1808,14 @@ export default function App() {
                 </div>
                 <p style={{fontFamily:"'Lato',sans-serif",fontSize:".74rem",color:C.taupe}}>Marca una habitación como CERRADA para mantenimiento o fuera de servicio. Los huéspedes no podrán reservarla.</p>
               </div>
+            </div>
+          </div>)}
+
+          {/* ═══ PRECIOS — the single home for everything price-related ═══ */}
+          {adminTab==="precios"&&(<div>
+            <div className="card" style={{padding:"1.75rem",maxWidth:860}}>
+              <h3 style={{fontFamily:"'Lato',sans-serif",fontSize:".8rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,marginBottom:".3rem"}}>💲 Precios — todo en un solo lugar</h3>
+              <p style={{fontFamily:"'Lato',sans-serif",fontSize:".78rem",color:C.taupe,marginTop:0,marginBottom:"1.6rem"}}>Precio base, descuentos y tarifas temporales. Todo lo relacionado con precios vive aquí — no hay que buscar en otras pestañas.</p>
 
               {/* ── Room Pricing ── */}
               <div style={{marginTop:"2rem"}}>
@@ -1956,6 +1951,13 @@ export default function App() {
                 <button onClick={saveRoomDiscounts} style={{background:C.gold,color:C.ebony,border:"none",padding:".45rem 1.2rem",fontFamily:"'Lato',sans-serif",fontSize:".73rem",fontWeight:700,cursor:"pointer",letterSpacing:".08em"}}>GUARDAR DESCUENTOS</button>
               </div>
             </div>
+
+            {/* ── Per-night price grid (moved here from Calendario) ── */}
+            <div style={{marginTop:"1.75rem"}}>
+              <h3 style={{fontFamily:"'Lato',sans-serif",fontSize:".8rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,marginBottom:".3rem"}}>📆 Calendario de precios por noche (avanzado)</h3>
+              <p style={{fontFamily:"'Lato',sans-serif",fontSize:".76rem",color:C.taupe,marginTop:0,marginBottom:"1.1rem"}}>Ajusta el precio de una noche específica, o usa "Editar en bloque" para un rango. Las tarifas temporales aparecen en azul.</p>
+              <MultiCalendar rooms={rooms} bookings={bookings} supabase={supabase} showToast={showToast} today={TODAY} seasons={seasons} />
+            </div>
           </div>)}
 
           </div>
@@ -2064,7 +2066,7 @@ export default function App() {
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1rem",marginBottom:"1rem"}}>
                 <div><FL>Nombre (ES)</FL><Inp value={editRoomD.name} onChange={e=>setEditRoomD({...editRoomD,name:e.target.value})}/></div>
                 <div><FL>Nombre (EN)</FL><Inp value={editRoomD.nameEn} onChange={e=>setEditRoomD({...editRoomD,nameEn:e.target.value})}/></div>
-                <div><FL>Precio / Noche ($)</FL><Inp type="number" value={editRoomD.price} onChange={e=>setEditRoomD({...editRoomD,price:parseFloat(e.target.value)||0})}/></div>
+                <div><FL>Precio / Noche</FL><div style={{fontSize:".76rem",color:C.taupe,padding:".55rem 0",fontFamily:"'Lato',sans-serif"}}>Se edita en la pestaña <strong style={{color:C.warm}}>💲 Precios</strong></div></div>
                 <div><FL>Camas</FL><Inp value={editRoomD.beds} onChange={e=>setEditRoomD({...editRoomD,beds:e.target.value})}/></div>
                 <div><FL>Tamaño</FL><Inp value={editRoomD.size} onChange={e=>setEditRoomD({...editRoomD,size:e.target.value})}/></div>
                 <div><FL>Máx. Huéspedes</FL><Inp type="number" value={editRoomD.guests} onChange={e=>setEditRoomD({...editRoomD,guests:parseInt(e.target.value)||1})}/></div>
