@@ -47,7 +47,7 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
   async function saveCell() {
     if (!sel || !supabase) return;
     const price = draft.price === "" ? null : Number(draft.price);
-    const { error } = await supabase.from("room_nights").upsert({ room_id: sel.roomId, date: sel.date, price, available: draft.available }, { onConflict: "room_id,date" });
+    const { error } = await supabase.from("room_nights").upsert({ room_id: String(sel.roomId), date: sel.date, price, available: draft.available }, { onConflict: "room_id,date" });
     if (error) { showToast?.("❌ " + error.message); return; }
     setNights(p => ({ ...p, [`${sel.roomId}|${sel.date}`]: { price, available: draft.available } }));
     setSel(null); showToast?.("Guardado ✓");
@@ -56,13 +56,13 @@ export default function MultiCalendar({ rooms = [], bookings = [], supabase, sho
   async function applyBulk(mode) {
     if (!supabase) return;
     if (!bulk.from || !bulk.to || bulk.from > bulk.to) { showToast?.("Elige un rango de fechas válido"); return; }
-    const targetRooms = bulk.room === "all" ? rooms.map(r => r.id) : [Number(bulk.room)];
+    const targetRooms = bulk.room === "all" ? rooms.map(r => r.id) : [bulk.room];
     const rows = [];
     for (const rid of targetRooms) {
       for (let d = new Date(bulk.from + "T00:00:00"); iso(d) <= bulk.to; d = addDays(d, 1)) {
         const key = `${rid}|${iso(d)}`, existing = nights[key] || {};
         rows.push({
-          room_id: rid, date: iso(d),
+          room_id: String(rid), date: iso(d),
           price: mode === "price" ? (bulk.price === "" ? null : Number(bulk.price)) : (existing.price ?? null),
           available: mode === "block" ? false : mode === "unblock" ? true : (existing.available ?? true),
         });
