@@ -504,6 +504,7 @@ export default function App() {
   const [channelFeeds,setChannelFeeds] = useState([]);               // configured channel_calendars rows
   const [feedForm,setFeedForm] = useState({room_id:"",source:"airbnb",ics_url:"",label:""});
   const [syncing,setSyncing] = useState(false);
+  const [emailsOn,setEmailsOn] = useState(false);   // master switch for automated guest emails (off until owner enables)
   const [toast,setToast] = useState("");
 
   // Data
@@ -525,7 +526,10 @@ export default function App() {
   const [expenses,setExpenses] = useState([]);
   const [expensesLoading,setExpensesLoading] = useState(true);
   const [roomAvail,setRoomAvail] = useState({}); // manual availability overrides per room
-  const [reviews,setReviews] = useState(REVIEWS_INIT);
+  const [reviews,setReviews] = useState(REVIEWS_INIT);   // sample testimonials — kept as public filler until real ones accumulate
+  const [dbReviews,setDbReviews] = useState([]);          // real, verified guest reviews from the DB
+  const [reviewParam,setReviewParam] = useState(()=>{ try{return new URLSearchParams(window.location.search).get('rev');}catch{return null;} });
+  const [reviewForm,setReviewForm] = useState({rating:5,body:"",done:false,err:""});
   const [settings,setSettings] = useState(SETTINGS_INIT);
 
   // Public UI
@@ -658,16 +662,38 @@ export default function App() {
     fetchMessages();
     fetchSettings();
     fetchChannels();
+    fetchDbReviews();
   },[]);
+  async function fetchDbReviews(){
+    const {data} = await supabase.from('reviews').select('*').order('created_at',{ascending:false});
+    if(data) setDbReviews(data);
+  }
+  async function sendGuestEmails(){
+    try{
+      const {data:{session}} = await supabase.auth.getSession();
+      if(!session?.access_token) return;
+      await fetch('/api/guest-emails',{method:'POST',headers:{Authorization:`Bearer ${session.access_token}`}});
+    }catch{}
+  }
 
   // ─── Channel calendar sync (Airbnb / Booking.com iCal import) ───
   async function fetchChannels(){
-    const [{data:feeds},{data:blocks}] = await Promise.all([
+    const [{data:feeds},{data:blocks},{data:st}] = await Promise.all([
       supabase.from('channel_calendars').select('*').order('created_at',{ascending:true}),
       supabase.from('channel_blocks').select('room_id,date,source'),
+      supabase.from('settings').select('guest_emails_on').eq('id',1).single(),
     ]);
     if(feeds) setChannelFeeds(feeds);
     if(blocks) setChannelBlocks(new Set(blocks.map(b=>`${String(b.room_id)}|${b.date}`)));
+    if(st) setEmailsOn(!!st.guest_emails_on);
+  }
+  async function toggleGuestEmails(){
+    const next=!emailsOn;
+    const {error}=await supabase.from('settings').update({guest_emails_on:next}).eq('id',1);
+    if(error){showToast("❌ "+error.message);return;}
+    setEmailsOn(next);
+    showToast(next?"Correos automáticos ACTIVADOS ✓":"Correos automáticos desactivados");
+    if(next) sendGuestEmails();
   }
   async function syncChannels(silent=false){
     setSyncing(true);
@@ -680,8 +706,8 @@ export default function App() {
     }catch(e){ if(!silent) showToast('❌ '+e.message); }
     setSyncing(false);
   }
-  // Refresh OTA blocks in the background whenever the admin opens the panel.
-  useEffect(()=>{ if(adminAuth) syncChannels(true); },[adminAuth]);
+  // On admin open: refresh OTA blocks + fire any due pre-arrival / post-stay guest emails.
+  useEffect(()=>{ if(adminAuth){ syncChannels(true); sendGuestEmails(); } },[adminAuth]);
   async function addFeed(){
     if(!feedForm.ics_url.trim()){showToast("Pega el enlace iCal del canal");return;}
     const label = feedForm.label.trim() || (feedForm.source==='airbnb'?'Airbnb':feedForm.source==='booking'?'Booking.com':'Canal');
@@ -906,6 +932,7 @@ export default function App() {
       .on("postgres_changes",{event:"*",schema:"public",table:"discounts"},()=>fetchDiscounts())
       .on("postgres_changes",{event:"*",schema:"public",table:"settings"},()=>fetchSettings())
       .on("postgres_changes",{event:"*",schema:"public",table:"channel_blocks"},()=>fetchChannels())
+      .on("postgres_changes",{event:"*",schema:"public",table:"reviews"},()=>fetchDbReviews())
       .on("postgres_changes",{event:"*",schema:"public",table:"room_nights"},()=>setGridVersion(v=>v+1))
       .subscribe();
     return()=>supabase.removeChannel(ch);
@@ -1801,30 +1828,33 @@ export default function App() {
 
           {/* ── REVIEWS ── */}
           {adminTab==="reviews"&&(<div>
-            <div style={{marginBottom:"1.25rem",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <p style={{fontFamily:"'Lato',sans-serif",fontSize:".82rem",color:C.taupe}}>{reviews.filter(r=>r.approved).length} publicadas · Promedio: {(reviews.reduce((s,r)=>s+r.rating,0)/reviews.length).toFixed(1)} ⭐</p>
+            <div style={{marginBottom:"1.1rem"}}>
+              <p style={{fontFamily:"'Lato',sans-serif",fontSize:".82rem",color:C.taupe,margin:0}}>{dbReviews.filter(r=>r.approved).length} publicada(s) · {dbReviews.length} reseña(s) real(es){dbReviews.length?` · Promedio ${(dbReviews.reduce((s,r)=>s+r.rating,0)/dbReviews.length).toFixed(1)} ⭐`:""}</p>
+              <p style={{fontFamily:"'Lato',sans-serif",fontSize:".74rem",color:C.taupe,marginTop:".35rem"}}>Las reseñas reales llegan solas: tras cada estadía se pide una por correo. En el sitio se muestran testimonios de ejemplo por ahora; las reales los irán reemplazando poco a poco a medida que las publiques.</p>
             </div>
-            <div style={{display:"flex",flexDirection:"column",gap:"1rem"}}>
-              {reviews.map(r=>(
-                <div key={r.id} className="card" style={{padding:"1.4rem 1.7rem",borderLeft:`4px solid ${r.approved?C.gold:C.sand}`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:".55rem",flexWrap:"wrap",gap:".5rem"}}>
-                    <div style={{display:"flex",gap:".7rem",alignItems:"center",flexWrap:"wrap"}}>
-                      <span style={{fontFamily:"'Lato',sans-serif",fontWeight:700,color:C.ebony}}>{r.guest}</span>
-                      <span style={{color:C.taupe,fontSize:".76rem",fontFamily:"'Lato',sans-serif"}}>{r.country} · {r.date}</span>
-                      <span style={{color:C.gold,letterSpacing:2,fontSize:".85rem"}}>{"★".repeat(r.rating)}{"☆".repeat(5-r.rating)}</span>
+            {dbReviews.length===0
+              ? <div className="card" style={{padding:"1.5rem",color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".85rem"}}>Aún no hay reseñas reales. Se solicitan automáticamente por correo tras cada estadía y aparecerán aquí para que las apruebes.</div>
+              : <div style={{display:"flex",flexDirection:"column",gap:"1rem"}}>
+                {dbReviews.map(r=>(
+                  <div key={r.id} className="card" style={{padding:"1.4rem 1.7rem",borderLeft:`4px solid ${r.approved?C.gold:C.sand}`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:".55rem",flexWrap:"wrap",gap:".5rem"}}>
+                      <div style={{display:"flex",gap:".7rem",alignItems:"center",flexWrap:"wrap"}}>
+                        <span style={{fontFamily:"'Lato',sans-serif",fontWeight:700,color:C.ebony}}>{r.name}</span>
+                        <span style={{color:C.taupe,fontSize:".76rem",fontFamily:"'Lato',sans-serif"}}>{r.created_at?r.created_at.slice(0,10):""} · ✓ Estadía verificada</span>
+                        <span style={{color:C.gold,letterSpacing:2,fontSize:".85rem"}}>{"★".repeat(r.rating)}{"☆".repeat(5-r.rating)}</span>
+                      </div>
+                      <span style={{fontFamily:"'Lato',sans-serif",fontSize:".67rem",background:r.approved?C.successBg:C.dangerBg,color:r.approved?C.success:C.danger,padding:".14rem .65rem",borderRadius:20,fontWeight:700}}>{r.approved?"Publicada":"Pendiente"}</span>
                     </div>
-                    <span style={{fontFamily:"'Lato',sans-serif",fontSize:".67rem",background:r.approved?C.successBg:C.dangerBg,color:r.approved?C.success:C.danger,padding:".14rem .65rem",borderRadius:20,fontWeight:700}}>{r.approved?"Publicada":"Oculta"}</span>
+                    <p style={{fontStyle:"italic",color:C.ebony,lineHeight:1.75,marginBottom:".9rem"}}>"{r.body}"</p>
+                    <div style={{display:"flex",gap:".45rem",flexWrap:"wrap"}}>
+                      <button className={r.approved?"btn-danger":"btn-success"} style={{fontSize:".63rem",padding:".25rem .65rem"}} onClick={async()=>{const {error}=await supabase.from('reviews').update({approved:!r.approved}).eq('id',r.id);if(error){showToast("❌ "+error.message);return;}fetchDbReviews();showToast(r.approved?"Ocultada":"Publicada ✓");}}>
+                        {r.approved?"Ocultar":"Publicar"}
+                      </button>
+                      <button style={{background:"none",border:"none",color:C.danger,cursor:"pointer",fontFamily:"'Lato',sans-serif",fontSize:".7rem"}} onClick={async()=>{const {error}=await supabase.from('reviews').delete().eq('id',r.id);if(error){showToast("❌ "+error.message);return;}fetchDbReviews();showToast("Eliminada");}}>Eliminar</button>
+                    </div>
                   </div>
-                  <p style={{fontStyle:"italic",color:C.ebony,lineHeight:1.75,marginBottom:".9rem"}}>"{r.text}"</p>
-                  <div style={{display:"flex",gap:".45rem",flexWrap:"wrap"}}>
-                    <button className={r.approved?"btn-danger":"btn-success"} style={{fontSize:".63rem",padding:".25rem .65rem"}} onClick={()=>{setReviews(reviews.map(x=>x.id===r.id?{...x,approved:!x.approved}:x));showToast(r.approved?"Ocultada":"Publicada ✓");}}>
-                      {r.approved?"Ocultar":"Publicar"}
-                    </button>
-                    <button style={{background:"none",border:"none",color:C.danger,cursor:"pointer",fontFamily:"'Lato',sans-serif",fontSize:".7rem"}} onClick={()=>{setReviews(reviews.filter(x=>x.id!==r.id));showToast("Eliminada");}}>Eliminar</button>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>}
           </div>)}
 
           {/* ── ANALYTICS ── */}
@@ -1945,6 +1975,17 @@ export default function App() {
                   <div style={{gridColumn:"1/-1"}}><FL>Enlace iCal (.ics)</FL><Inp value={feedForm.ics_url} onChange={e=>setFeedForm(p=>({...p,ics_url:e.target.value}))} placeholder="https://www.airbnb.com/calendar/ical/....ics"/></div>
                 </div>
                 <button className="btn-gold" style={{marginTop:".7rem"}} onClick={addFeed}>+ Añadir calendario</button>
+              </div>
+
+              {/* ── Automated guest emails toggle ── */}
+              <div style={{marginTop:"2rem"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:".6rem"}}>
+                  <div style={{minWidth:0}}>
+                    <p style={{fontFamily:"'Lato',sans-serif",fontSize:".77rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,margin:0}}>✉️ Correos automáticos a huéspedes</p>
+                    <p style={{fontFamily:"'Lato',sans-serif",fontSize:".74rem",color:C.taupe,marginTop:".3rem",maxWidth:540}}>Un correo antes de la llegada (dirección, check-in, WhatsApp) y otro tras la salida pidiendo una reseña. Cada huésped lo recibe una sola vez. Actívalo cuando estés listo.</p>
+                  </div>
+                  <button onClick={toggleGuestEmails} style={{flexShrink:0,background:emailsOn?"#2e7d32":C.sand,color:emailsOn?"#fff":C.ebony,border:"none",padding:".45rem 1.15rem",fontFamily:"'Lato',sans-serif",fontSize:".72rem",fontWeight:700,cursor:"pointer",borderRadius:6,letterSpacing:".06em"}}>{emailsOn?"● ACTIVADO":"○ DESACTIVADO"}</button>
+                </div>
               </div>
             </div>
           </div>)}
@@ -2497,16 +2538,22 @@ export default function App() {
         <div style={{maxWidth:1000,margin:"0 auto"}}>
           <SHead eyebrow={t("TESTIMONIOS","TESTIMONIALS")} title={t("Lo Que Dicen Nuestros Huéspedes","What Our Guests Say")}/>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(400px,1fr))",gap:"1.5rem"}}>
-            {reviews.filter(r=>r.approved).map((r,i)=>(
-              <div key={i} style={{background:C.white,padding:"2rem 2.2rem",borderTop:`3px solid ${C.gold}`}}>
-                <div style={{color:C.gold,letterSpacing:3,marginBottom:".9rem",fontSize:".86rem"}}>{"★".repeat(r.rating)}</div>
-                <p style={{color:C.ebony,lineHeight:1.85,fontSize:".95rem",fontStyle:"italic",marginBottom:"1.2rem"}}>"{r.text}"</p>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'Lato',sans-serif"}}>
-                  <div><span style={{fontWeight:700,color:C.mahogany,fontSize:".82rem"}}>{r.guest}</span><span style={{color:C.taupe,fontSize:".75rem",marginLeft:".5rem"}}>{r.country}</span></div>
-                  <span style={{color:C.taupe,fontSize:".73rem"}}>{r.date}</span>
+            {(()=>{
+              // Real verified reviews first, then sample testimonials fill up to 6 — as real ones
+              // accumulate they push the samples out (samples stay in code as filler for now).
+              const real=dbReviews.filter(r=>r.approved).map(r=>({rating:r.rating,text:r.body,guest:r.name,country:t("✓ Estadía verificada","✓ Verified stay"),date:r.created_at?r.created_at.slice(0,10):""}));
+              const samples=reviews.filter(r=>r.approved);
+              return [...real,...samples].slice(0,6).map((r,i)=>(
+                <div key={i} style={{background:C.white,padding:"2rem 2.2rem",borderTop:`3px solid ${C.gold}`}}>
+                  <div style={{color:C.gold,letterSpacing:3,marginBottom:".9rem",fontSize:".86rem"}}>{"★".repeat(r.rating)}</div>
+                  <p style={{color:C.ebony,lineHeight:1.85,fontSize:".95rem",fontStyle:"italic",marginBottom:"1.2rem"}}>"{r.text}"</p>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'Lato',sans-serif"}}>
+                    <div><span style={{fontWeight:700,color:C.mahogany,fontSize:".82rem"}}>{r.guest}</span><span style={{color:C.taupe,fontSize:".75rem",marginLeft:".5rem"}}>{r.country}</span></div>
+                    <span style={{color:C.taupe,fontSize:".73rem"}}>{r.date}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ));
+            })()}
           </div>
         </div>
       </div>
@@ -2561,6 +2608,39 @@ export default function App() {
       </a>
 
       {/* ── PUBLIC MODALS ── */}
+
+      {/* Verified-review submission (opened by the ?rev=<bookingId> link in the post-stay email) */}
+      {reviewParam&&(()=>{
+        const close=()=>{setReviewParam(null);try{window.history.replaceState({},"",window.location.pathname);}catch{}};
+        return(
+        <Backdrop onClose={close}>
+          <ModalBox>
+            <ModalHdr title={t("Tu reseña","Your review")} sub="CAONABO 35" onClose={close}/>
+            <div style={{padding:"1.5rem 2rem"}}>
+              {reviewForm.done
+                ? <p style={{textAlign:"center",color:C.ebony,fontSize:"1rem",padding:"1.4rem 0",lineHeight:1.6}}>{t("¡Gracias por tu reseña! 🙏 La revisaremos y publicaremos pronto.","Thank you for your review! 🙏 We'll review and publish it soon.")}</p>
+                : (<>
+                  {reviewForm.err&&<div className="error-banner">{reviewForm.err}</div>}
+                  <p style={{fontFamily:"'Lato',sans-serif",fontSize:".85rem",color:C.taupe,marginBottom:".9rem"}}>{t("¿Cómo estuvo tu estadía en Caonabo 35?","How was your stay at Caonabo 35?")}</p>
+                  <div style={{textAlign:"center",marginBottom:"1rem",fontSize:"2rem",letterSpacing:6}}>
+                    {[1,2,3,4,5].map(n=><span key={n} onClick={()=>setReviewForm(f=>({...f,rating:n}))} style={{color:n<=reviewForm.rating?C.gold:C.sand,cursor:"pointer"}}>★</span>)}
+                  </div>
+                  <textarea value={reviewForm.body} onChange={e=>setReviewForm(f=>({...f,body:e.target.value}))} placeholder={t("Cuéntanos cómo estuvo tu estadía…","Tell us about your stay…")} style={{width:"100%",height:110,padding:".8rem",border:`1px solid ${C.sand}`,fontFamily:"'Lato',sans-serif",fontSize:".9rem",background:C.smoke,color:C.ebony,resize:"vertical",marginBottom:"1rem",outline:"none"}}/>
+                  <button className="btn-gold" style={{width:"100%"}} onClick={async()=>{
+                    if(!reviewForm.body.trim()){setReviewForm(f=>({...f,err:t("Escribe algo, por favor.","Please write something.")}));return;}
+                    try{
+                      const res=await fetch('/api/submit-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bookingId:reviewParam,rating:reviewForm.rating,body:reviewForm.body})});
+                      const j=await res.json().catch(()=>({}));
+                      if(!res.ok){setReviewForm(f=>({...f,err:j.error||"Error"}));return;}
+                      setReviewForm(f=>({...f,done:true,err:""}));
+                    }catch(e){setReviewForm(f=>({...f,err:e.message}));}
+                  }}>{t("Enviar reseña","Submit review")}</button>
+                </>)}
+            </div>
+          </ModalBox>
+        </Backdrop>
+        );
+      })()}
 
       {/* Booking modal with price breakdown + conflict protection */}
       {bookModal&&(()=>{
