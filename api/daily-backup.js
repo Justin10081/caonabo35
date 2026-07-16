@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { Resend } from 'resend';
+import { runGuestEmails } from './guest-emails.js';
 
 export default async function handler(req, res) {
   // Only allow cron calls (Vercel sets this header)
@@ -44,5 +45,9 @@ export default async function handler(req, res) {
     }]
   });
 
-  return res.status(200).json({ ok: true, count: bookings.length });
+  // Also run the automated guest emails once a day (respects the owner's on/off switch internally).
+  let emails = null;
+  try { emails = await runGuestEmails(supabase); } catch (e) { emails = { error: e.message }; }
+
+  return res.status(200).json({ ok: true, count: bookings.length, emails });
 }

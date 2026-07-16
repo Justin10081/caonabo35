@@ -2,12 +2,12 @@ import { createClient } from '@supabase/supabase-js';
 import { Resend } from 'resend';
 
 // Automated guest emails, sent once per booking:
-//  · pre-arrival  (within ~3 days before check-in): directions, check-in time, WhatsApp
-//  · post-stay    (within ~3 days after check-out): thank-you + a verified-review link (?rev=<id>)
-// Deduped via bookings.prearrival_sent_at / review_email_sent_at. Triggered by the daily cron
-// (Authorization: Bearer CRON_SECRET) or silently when the admin opens the panel (admin token).
+//  · pre-arrival  (<=3 days before check-in, and only if the stay runs past today)
+//  · post-stay    (starting the day AFTER check-out — never the same day they're here)
+// Deduped via bookings.prearrival_sent_at / review_email_sent_at. Runs from the daily backup
+// cron and silently when the admin opens the panel (which also catches same-day bookings).
 const resend = new Resend(process.env.RESEND_API_KEY);
-const FROM_EMAIL = process.env.FROM_EMAIL || 'Caonabo 35 <onboarding@resend.dev>';
+const FROM_EMAIL = process.env.FROM_EMAIL || 'reservas@caonabo35.com';
 const REPLY_TO   = process.env.REPLY_TO;
 const SITE = 'https://caonabo35.com';
 
@@ -18,29 +18,21 @@ const shell = (inner) => `<div style="font-family:Georgia,serif;max-width:560px;
   <div style="padding:1rem 1.5rem;background:#efe9e0;font-size:12px;color:#8B6B4E;text-align:center">Av. Caonabo #35, 2do Piso · Santo Domingo, R.D.</div>
 </div>`;
 
-export default async function handler(req, res) {
-  const supabase = createClient(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-
-  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
-  let allowed = false;
-  if (process.env.CRON_SECRET && bearer && bearer === process.env.CRON_SECRET) allowed = true;
-  else if (bearer) { try { const { data } = await supabase.auth.getUser(bearer); if (data?.user) allowed = true; } catch {} }
-  if (!allowed) return res.status(401).json({ error: 'Unauthorized' });
-
+// Core logic, callable directly (from daily-backup) or via the HTTP handler below.
+export async function runGuestEmails(supabase) {
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santo_Domingo' });
-  const { data: settings } = await supabase.from('settings').select('whatsapp,checkIn,check_in,phone,guest_emails_on').eq('id', 1).single().catch(() => ({ data: null }));
-  // Owner-controlled master switch — off until they've reviewed the templates and turned it on.
-  if (!settings?.guest_emails_on) return res.status(200).json({ ok: true, disabled: true });
+  const { data: settings } = await supabase.from('settings').select('whatsapp,guest_emails_on').eq('id', 1).single().catch(() => ({ data: null }));
+  if (!settings?.guest_emails_on) return { disabled: true };
   const wa = (settings?.whatsapp || '18096033038').replace(/\D/g, '');
   const waLink = `https://wa.me/${wa}`;
-
   const sent = { prearrival: 0, poststay: 0, errors: [] };
 
-  // ── Pre-arrival: arrivals in the next 3 days, not yet emailed ──
+  // Pre-arrival: arriving within 3 days AND the stay runs past today (skips same-day-in-and-out).
   const { data: arrivals } = await supabase.from('bookings')
     .select('id,guest,email,check_in,check_out')
     .in('status', ['confirmed', 'checked_in'])
     .gte('check_in', today).lte('check_in', addDays(today, 3))
+    .gt('check_out', today)
     .is('prearrival_sent_at', null);
   for (const b of (arrivals || [])) {
     if (!b.email) continue;
@@ -64,11 +56,11 @@ export default async function handler(req, res) {
     } catch (e) { sent.errors.push(`prearrival ${b.id}: ${e.message}`); }
   }
 
-  // ── Post-stay review request: checked out in the last 3 days, not yet emailed ──
+  // Post-stay review request: checked out BEFORE today (never same-day), within the last 3 days.
   const { data: departures } = await supabase.from('bookings')
     .select('id,guest,email,check_out')
     .in('status', ['finalizada', 'checked_in', 'confirmed'])
-    .lte('check_out', today).gte('check_out', addDays(today, -3))
+    .lt('check_out', today).gte('check_out', addDays(today, -3))
     .is('review_email_sent_at', null);
   for (const b of (departures || [])) {
     if (!b.email) continue;
@@ -87,6 +79,16 @@ export default async function handler(req, res) {
       sent.poststay++;
     } catch (e) { sent.errors.push(`poststay ${b.id}: ${e.message}`); }
   }
+  return sent;
+}
 
-  return res.status(200).json({ ok: true, ...sent });
+export default async function handler(req, res) {
+  const supabase = createClient(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  let allowed = false;
+  if (process.env.CRON_SECRET && bearer && bearer === process.env.CRON_SECRET) allowed = true;
+  else if (bearer) { try { const { data } = await supabase.auth.getUser(bearer); if (data?.user) allowed = true; } catch {} }
+  if (!allowed) return res.status(401).json({ error: 'Unauthorized' });
+  const result = await runGuestEmails(supabase);
+  return res.status(200).json({ ok: true, ...result });
 }
