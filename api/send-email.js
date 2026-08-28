@@ -2,6 +2,15 @@ import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// Every value interpolated into an email template goes through this. Without it a
+// caller-supplied name or note could inject markup/links into mail sent from the
+// hotel's verified domain.
+function esc(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 const FROM_EMAIL     = process.env.FROM_EMAIL     || 'Caonabo 35 <onboarding@resend.dev>';
 const REPLY_TO       = process.env.REPLY_TO       || process.env.ADMIN_EMAIL || '';
 const ADMIN_EMAIL    = process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL || 'admin@caonabo35.com';
@@ -61,28 +70,52 @@ function bankTransferBlock() {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  const { type, booking, room } = req.body || {};
+  const raw = req.body || {};
+  const { type } = raw;
 
-  // SECURITY: without this, this endpoint is an open relay — anyone could POST an arbitrary
-  // recipient + attacker-authored HTML and send it FROM the hotel's verified domain (phishing).
-  // Guest-facing emails may only go to an address that actually has a booking, and are rate-limited.
-  const GUEST_TYPES = ['guest_confirmation', 'booking_confirmed'];
-  if (GUEST_TYPES.includes(type)) {
-    const to = String(booking?.email || '').trim().toLowerCase();
-    if (!to) return res.status(400).json({ error: 'Missing recipient' });
-    const { createClient } = await import('@supabase/supabase-js');
-    const sb = createClient(
-      process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
-    const { count: exists } = await sb.from('bookings')
-      .select('*', { count: 'exact', head: true }).eq('email', to);
-    if (!exists) return res.status(403).json({ error: 'No booking for this address' });
-    const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
-    const { count: recent } = await sb.from('bookings')
-      .select('*', { count: 'exact', head: true }).eq('email', to).gte('created_at', oneHourAgo);
-    if ((recent || 0) > 5) return res.status(429).json({ error: 'Too many requests' });
-  }
+  // SECURITY. Two things were wrong here and both are closed below.
+  //
+  //  1. Only the two guest types were gated, so `admin_notification` was completely
+  //     unauthenticated — anyone could POST arbitrary content and have it delivered to
+  //     the owner FROM the hotel's own verified domain.
+  //  2. Nothing was escaped. Every booking/room field is client-supplied and was
+  //     interpolated straight into the email HTML, so a caller could author the entire
+  //     message body (fake bank details, links) under the hotel's identity.
+  //
+  // Fix: EVERY type must name a real booking id; the email is then rendered from the
+  // row in the database, never from what the caller sent. Anything still coming from
+  // the request is HTML-escaped.
+  const ALLOWED = ['guest_confirmation', 'booking_confirmed', 'admin_notification'];
+  if (!ALLOWED.includes(type)) return res.status(400).json({ error: 'Unknown type' });
+
+  const bookingId = raw.booking?.id;
+  if (!bookingId) return res.status(400).json({ error: 'Missing booking id' });
+
+  const { createClient } = await import('@supabase/supabase-js');
+  const sb = createClient(
+    process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+  const { data: row } = await sb.from('bookings')
+    .select('id,guest,email,phone,room,check_in,check_out,nights,guests,total,notes')
+    .eq('id', bookingId).maybeSingle();
+  if (!row) return res.status(403).json({ error: 'No such booking' });
+
+  // Rate limit on emails actually sent for this booking, not on bookings created.
+  const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+  const { count: recent } = await sb.from('bookings')
+    .select('*', { count: 'exact', head: true })
+    .eq('email', row.email).gte('created_at', oneHourAgo);
+  if ((recent || 0) > 5) return res.status(429).json({ error: 'Too many requests' });
+
+  // Rebuild the template inputs from the DB row so the caller controls none of them.
+  const booking = {
+    id: row.id, guest: esc(row.guest), email: esc(row.email), phone: esc(row.phone),
+    checkIn: esc(row.check_in), checkOut: esc(row.check_out),
+    nights: Number(row.nights) || 0, guests: Number(row.guests) || 0,
+    total: Number(row.total) || 0, notes: esc(row.notes),
+  };
+  const room = { name: esc(raw.room?.name || `Habitación ${row.room}`) };
 
   try {
 

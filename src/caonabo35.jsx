@@ -176,6 +176,47 @@ function compressImage(file,maxW=700,maxH=900,quality=0.75){
     reader.readAsDataURL(file);
   });
 }
+// ── Room photos ───────────────────────────────────────────────────────────
+// Photos live in Supabase Storage (bucket `room-photos`) as an ordered list on
+// rooms.photos, so the owner can change them from the admin without a redeploy.
+// A room the owner has never touched falls back to the two photos bundled with
+// the app, so nothing goes blank during the transition.
+const PHOTO_BUCKET = "room-photos";
+const DEFAULT_LABELS = ["Dormitorio","Baño"];
+function roomPhotos(room){
+  const saved = Array.isArray(room?.photos) ? room.photos.filter(p=>p&&p.url) : [];
+  if(saved.length) return saved.map((p,i)=>({url:p.url,label:p.label||`Foto ${i+1}`,path:p.path}));
+  return [room?.bedroom,room?.bathroom]
+    .map((url,i)=>url?{url,label:DEFAULT_LABELS[i]}:null)
+    .filter(Boolean);
+}
+const coverPhoto = (room) => roomPhotos(room)[0]?.url || "";
+
+// Same idea as compressImage but yields a Blob for direct upload to Storage,
+// and at a larger size — these are the hero photos on the public site, not a
+// thumbnail. A modern phone photo (4-8 MB) lands around 200-400 KB here.
+function compressToBlob(file,maxW=1600,maxH=1200,quality=0.82){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('read failed'));
+    reader.onload=e=>{
+      const img=new Image();
+      img.onerror=()=>reject(new Error('not an image'));
+      img.onload=()=>{
+        let w=img.width,h=img.height;
+        const ratio=Math.min(maxW/w,maxH/h,1);
+        w=Math.round(w*ratio); h=Math.round(h*ratio);
+        const canvas=document.createElement('canvas');
+        canvas.width=w; canvas.height=h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        canvas.toBlob(b=>b?resolve(b):reject(new Error('encode failed')),'image/jpeg',quality);
+      };
+      img.src=e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 const fmtMoney = (n) => "$" + Number(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const TODAY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santo_Domingo' }); // real current date (was hardcoded to 2026-03-26)
 const ROOM_COLORS = ["#8B6B4E","#5C3D2E","#6B7A5A","#C4973A","#1565C0","#7B1FA2","#C62828"];
@@ -345,6 +386,21 @@ const css = `
 
 // ─── Primitives ───────────────────────────────────────────────────────
 const FL = ({children}) => <label className="field-label">{children}</label>;
+// Prev/next arrows overlaid on the room-photo lightbox
+const lightboxArrow = (side) => ({
+  position:"absolute", top:"35%", [side]:"-4px", transform:"translateY(-50%)",
+  width:44, height:44, borderRadius:"50%", zIndex:2,
+  background:"rgba(26,15,8,.62)", border:"1px solid rgba(196,151,58,.55)",
+  color:"#E8D9B8", fontSize:"1.7rem", lineHeight:1, cursor:"pointer",
+  display:"flex", alignItems:"center", justifyContent:"center",
+});
+// Small square control under each room-photo thumbnail (reorder / cover / delete)
+const photoBtn = (disabled) => ({
+  flex:1, padding:".2rem 0", fontSize:".68rem", lineHeight:1.2,
+  fontFamily:"'Lato',sans-serif", background:"#fff", color:"#2A1F16",
+  border:"1px solid #E0D5C7", cursor:disabled?"default":"pointer",
+  opacity:disabled?0.35:1,
+});
 const Inp = ({style={},className="",...p}) => <input className={`inp ${className}`} style={style} {...p}/>;
 const Sel = ({children,style={},...p}) => <select className="sel" style={style} {...p}>{children}</select>;
 const Bdg = ({s}) => {
@@ -540,7 +596,7 @@ export default function App() {
   const [showConfirmation,setShowConfirmation] = useState(null); // holds completed booking
   const [showPrivacy,setShowPrivacy] = useState(false);
   const [guestPortalOpen,setGuestPortalOpen] = useState(false);
-  const [guestLookup,setGuestLookup] = useState({id:'',email:''});
+  const [guestLookup,setGuestLookup] = useState({id:'',email:'',phone:''});
   const [guestBooking,setGuestBooking] = useState(null);
   const [guestLookupError,setGuestLookupError] = useState('');
   const [guestLookupLoading,setGuestLookupLoading] = useState(false);
@@ -573,6 +629,7 @@ export default function App() {
   const [newBError,setNewBError] = useState("");
   const [editRoom,setEditRoom] = useState(null);
   const [editRoomD,setEditRoomD] = useState(null);
+  const [photoBusy,setPhotoBusy] = useState(false);
   const [replyModal,setReplyModal] = useState(null);
   const [replyTxt,setReplyTxt] = useState("");
   const [addExpModal,setAddExpModal] = useState(false);
@@ -681,7 +738,7 @@ export default function App() {
     const [{data:feeds},{data:blocks},{data:st}] = await Promise.all([
       supabase.from('channel_calendars').select('*').order('created_at',{ascending:true}),
       supabase.from('channel_blocks').select('room_id,date,source'),
-      supabase.from('settings').select('guest_emails_on').eq('id',1).single(),
+      supabase.from('settings').select('guest_emails_on').eq('id',1).maybeSingle(),
     ]);
     if(feeds) setChannelFeeds(feeds);
     if(blocks) setChannelBlocks(new Set(blocks.map(b=>`${String(b.room_id)}|${b.date}`)));
@@ -740,7 +797,7 @@ export default function App() {
 
   // ─── Fetch settings (including seasons) from Supabase on mount ───
   async function fetchSettings() {
-    const {data,error} = await supabase.from('settings').select('*').eq('id',1).single();
+    const {data,error} = await supabase.from('settings').select('*').eq('id',1).maybeSingle();
     if(error||!data) return;
     setSettings({
       propName: data.hotel_name || SETTINGS_INIT.propName,
@@ -793,7 +850,7 @@ export default function App() {
     await supabase.from('discounts').update({active}).eq('id',id);
   }
   async function fetchRoomPrices() {
-    const {data,error} = await supabase.from('rooms').select('id,price_override,discount,name,name_en,beds,guests,size,description,amenities');
+    const {data,error} = await supabase.from('rooms').select('id,price_override,discount,name,name_en,beds,guests,size,description,amenities,photos');
     if(error||!data) return;
     const overrides = {};
     const discMap = {};
@@ -818,6 +875,8 @@ export default function App() {
         size:      row.size ?? r.size,
         desc:      row.description ?? r.desc,
         amenities: Array.isArray(row.amenities) ? row.amenities : r.amenities,
+        // null / [] both mean "use the bundled defaults" — roomPhotos() handles the fallback
+        photos:    Array.isArray(row.photos) ? row.photos : (r.photos || null),
       };
     }));
     setRoomPriceOverrides(overrides);
@@ -990,13 +1049,15 @@ export default function App() {
   // ─── Guest portal lookup ─────────────────────────────────────────────
   async function lookupGuestBooking() {
     if(!guestLookup.email){setGuestLookupError(t("Ingresa tu email.","Enter your email."));return;}
+    if(String(guestLookup.phone||"").replace(/[^0-9]/g,"").length<6){
+      setGuestLookupError(t("Ingresa el teléfono de tu reserva.","Enter the phone number on your booking."));return;}
     setGuestLookupLoading(true);
     setGuestLookupError('');
     try {
       const res = await fetch('/api/lookup-booking', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({email: guestLookup.email.trim().toLowerCase()})
+        body: JSON.stringify({email: guestLookup.email.trim().toLowerCase(), phone: guestLookup.phone})
       });
       const json = await res.json();
       if(!res.ok||!json.bookings||json.bookings.length===0){
@@ -1118,6 +1179,7 @@ export default function App() {
       size: editRoomD.size,
       description: editRoomD.desc,
       amenities: editRoomD.amenities,
+      photos: Array.isArray(editRoomD.photos) ? editRoomD.photos : null,
     },{onConflict:'id'});
     if(error){ showToast("❌ Error al guardar: "+error.message); return; }
     const updated = rooms.map(r=>r.id===editRoomD.id?editRoomD:r);
@@ -1128,6 +1190,85 @@ export default function App() {
     localStorage.setItem('c35_prices', JSON.stringify(allPrices));
     setEditRoom(null);setEditRoomD(null);showToast("Habitación actualizada ✓");
   }
+  // ── Room photo management ───────────────────────────────────────────────
+  // Every action here persists to the DB IMMEDIATELY rather than waiting for
+  // "Guardar cambios". Photo work is slow and easy to lose, and this app has a
+  // history of edits silently not sticking — so the write happens first and the
+  // UI only updates once the DB confirms it.
+  async function persistPhotos(roomId, photos){
+    const {error} = await supabase.from('rooms')
+      .upsert({id:String(roomId), photos},{onConflict:'id'});
+    if(error){ showToast("❌ No se pudo guardar: "+error.message); return false; }
+    setRooms(prev=>prev.map(r=>r.id===roomId?{...r,photos}:r));
+    setEditRoomD(prev=>prev&&prev.id===roomId?{...prev,photos}:prev);
+    return true;
+  }
+
+  async function uploadRoomPhotos(roomId, fileList){
+    const files = Array.from(fileList||[]).filter(f=>f.type.startsWith('image/'));
+    if(!files.length) return;
+    setPhotoBusy(true);
+    // A room still showing the two bundled defaults has photos === null; its first
+    // upload starts a real gallery. After that we append to what is already there.
+    const next = Array.isArray(editRoomD?.photos) ? [...editRoomD.photos] : [];
+    let added = 0;
+    for(const file of files){
+      try{
+        const blob = await compressToBlob(file, 1600, 1200, 0.82);
+        if(blob.size > 4.5*1024*1024){ showToast(`❌ ${file.name} es demasiado grande`); continue; }
+        const path = `${roomId}/${Date.now()}-${Math.random().toString(36).slice(2,8)}.jpg`;
+        const {error} = await supabase.storage.from(PHOTO_BUCKET)
+          .upload(path, blob, {contentType:'image/jpeg', cacheControl:'31536000', upsert:false});
+        if(error){ showToast("❌ "+error.message); continue; }
+        const {data} = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
+        next.push({url:data.publicUrl, path, label:`Foto ${next.length+1}`});
+        added++;
+      }catch(e){ showToast("❌ Error con "+file.name); }
+    }
+    if(added){
+      const ok = await persistPhotos(roomId, next);
+      if(ok) showToast(`${added} foto${added>1?'s':''} subida${added>1?'s':''} ✓`);
+    }
+    setPhotoBusy(false);
+  }
+
+  async function deleteRoomPhoto(roomId, idx){
+    const list = Array.isArray(editRoomD?.photos)?[...editRoomD.photos]:[];
+    const [gone] = list.splice(idx,1);
+    if(!gone) return;
+    setPhotoBusy(true);
+    const ok = await persistPhotos(roomId, list);
+    // Remove the stored file only AFTER the row no longer references it, so a
+    // failed write can never leave the page pointing at a deleted image.
+    if(ok && gone.path){
+      const {error} = await supabase.storage.from(PHOTO_BUCKET).remove([gone.path]);
+      if(error) console.warn('Storage cleanup failed (row already updated):', error.message);
+    }
+    if(ok) showToast("Foto eliminada ✓");
+    setPhotoBusy(false);
+  }
+
+  async function moveRoomPhoto(roomId, idx, dir){
+    const list = Array.isArray(editRoomD?.photos)?[...editRoomD.photos]:[];
+    const j = idx+dir;
+    if(j<0||j>=list.length) return;
+    [list[idx],list[j]] = [list[j],list[idx]];
+    setPhotoBusy(true);
+    await persistPhotos(roomId, list);
+    setPhotoBusy(false);
+  }
+
+  async function makeRoomCover(roomId, idx){
+    const list = Array.isArray(editRoomD?.photos)?[...editRoomD.photos]:[];
+    if(idx<=0||idx>=list.length) return;
+    const [pick] = list.splice(idx,1);
+    list.unshift(pick);
+    setPhotoBusy(true);
+    const ok = await persistPhotos(roomId, list);
+    if(ok) showToast("Foto de portada actualizada ✓");
+    setPhotoBusy(false);
+  }
+
   async function fetchRoomAvailability() {
     const {data} = await supabase.from('rooms').select('id,available');
     if(data){ const m={}; data.forEach(r=>{m[r.id]=r.available;}); setRoomAvail(m); }
@@ -1674,7 +1815,7 @@ export default function App() {
                 return(
                   <div key={rm.id} className="card" style={{overflow:"hidden"}}>
                     <div style={{height:130,position:"relative",overflow:"hidden"}}>
-                      <img src={rm.bedroom} alt={rm.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                      <img src={coverPhoto(rm)} alt={rm.name} loading="lazy" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
                       <div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(26,15,8,.8),transparent 50%)"}}/>
                       <div style={{position:"absolute",bottom:"1rem",left:"1rem"}}>
                         <div style={{color:C.ivory,fontSize:"1rem",fontWeight:500}}>{rm.name}</div>
@@ -2260,6 +2401,52 @@ export default function App() {
                   ))}
                 </div>
               </div>
+              {/* ── Photos ──────────────────────────────────────────────── */}
+              <div style={{marginBottom:"1.4rem",borderTop:`1px solid ${C.sand}`,paddingTop:"1.2rem"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:".55rem",flexWrap:"wrap",gap:".5rem"}}>
+                  <FL>Fotos de la habitación</FL>
+                  <label className="btn-sm" style={{cursor:photoBusy?"wait":"pointer",opacity:photoBusy?0.6:1,margin:0}}>
+                    {photoBusy?"Subiendo…":"+ Añadir fotos"}
+                    <input type="file" accept="image/*" multiple disabled={photoBusy}
+                      style={{display:"none"}}
+                      onChange={e=>{ uploadRoomPhotos(editRoomD.id, e.target.files); e.target.value=""; }}/>
+                  </label>
+                </div>
+                {!Array.isArray(editRoomD.photos)&&(
+                  <div style={{fontFamily:"'Lato',sans-serif",fontSize:".74rem",color:C.taupe,background:C.smoke,padding:".6rem .8rem",borderLeft:`3px solid ${C.gold}`,marginBottom:".7rem",lineHeight:1.5}}>
+                    Esta habitación usa las 2 fotos originales de la app. Al subir la primera foto
+                    empiezas una galería nueva y puedes añadir todas las que quieras.
+                  </div>
+                )}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:".6rem"}}>
+                  {roomPhotos(editRoomD).map((p,i)=>{
+                    const editable = Array.isArray(editRoomD.photos) && editRoomD.photos.length>0;
+                    return (
+                      <div key={p.url+i} style={{border:`1px solid ${i===0?C.gold:C.sand}`,background:C.smoke}}>
+                        <div style={{position:"relative",height:86,overflow:"hidden"}}>
+                          <img src={p.url} alt={p.label} loading="lazy"
+                            style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                          {i===0&&<div style={{position:"absolute",top:0,left:0,background:C.gold,color:C.ebony,fontFamily:"'Lato',sans-serif",fontSize:".55rem",fontWeight:700,letterSpacing:".08em",padding:".12rem .4rem"}}>PORTADA</div>}
+                        </div>
+                        {editable&&(
+                          <div style={{display:"flex",gap:2,padding:3}}>
+                            <button title="Mover izquierda" disabled={photoBusy||i===0} onClick={()=>moveRoomPhoto(editRoomD.id,i,-1)} style={photoBtn(photoBusy||i===0)}>←</button>
+                            <button title="Mover derecha" disabled={photoBusy||i===roomPhotos(editRoomD).length-1} onClick={()=>moveRoomPhoto(editRoomD.id,i,1)} style={photoBtn(photoBusy||i===roomPhotos(editRoomD).length-1)}>→</button>
+                            <button title="Usar como portada" disabled={photoBusy||i===0} onClick={()=>makeRoomCover(editRoomD.id,i)} style={photoBtn(photoBusy||i===0)}>★</button>
+                            <button title="Eliminar foto" disabled={photoBusy}
+                              onClick={()=>{ if(window.confirm("¿Eliminar esta foto? No se puede deshacer.")) deleteRoomPhoto(editRoomD.id,i); }}
+                              style={{...photoBtn(photoBusy),color:"#C62828"}}>✕</button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{fontFamily:"'Lato',sans-serif",fontSize:".7rem",color:C.taupe,marginTop:".55rem"}}>
+                  La primera foto es la que se ve en la web. ★ la pone de portada, ← → cambian el orden.
+                  Los cambios de fotos se guardan al instante.
+                </div>
+              </div>
               <button className="btn-gold" style={{width:"100%"}} onClick={saveRoom}>GUARDAR CAMBIOS</button>
             </div>
           </ModalBox>
@@ -2451,8 +2638,8 @@ export default function App() {
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:"1.5rem"}}>
             {(()=>{const _tod=new Date();const todaySeason=seasons.find(s=>{const y=_tod.getFullYear();const sStart=new Date(`${parseInt(s.startMonth)>parseInt(s.endMonth)?y-1:y}-${s.startMonth}-${s.startDay}`);const sEnd=new Date(`${y}-${s.endMonth}-${s.endDay}`);return _tod>=sStart&&_tod<=sEnd;});return rooms.map(room=>(
               <div key={room.id} className="room-card">
-                <div style={{height:245,position:"relative",overflow:"hidden",cursor:"pointer"}} onClick={()=>setRoomLightbox({bedroom:room.bedroom,bathroom:room.bathroom,name:lang==="es"?room.name:room.nameEn,idx:0})}>
-                  <img src={room.bedroom} alt={room.name} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s"}}/>
+                <div style={{height:245,position:"relative",overflow:"hidden",cursor:"pointer"}} onClick={()=>setRoomLightbox({photos:roomPhotos(room),name:lang==="es"?room.name:room.nameEn,idx:0})}>
+                  <img src={coverPhoto(room)} alt={room.name} loading="lazy" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s"}}/>
                   <div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(26,15,8,.85) 0%,transparent 55%)"}}/>
                   <div className="rm-ovr" style={{position:"absolute",inset:0,background:"rgba(26,15,8,.65)",display:"flex",alignItems:"center",justifyContent:"center",opacity:0,transition:"opacity .3s"}}>
                     {(()=>{const un=roomAvail[room.id]===false||!room.available||(bookedRoomIds!==null&&bookedRoomIds.includes(room.id));return(<button className="btn-gold" onClick={e=>{e.stopPropagation();if(!un){setSelRoom(room.id);setBookModal(true);setBookError("");if(availDates.checkIn)setBookForm(f=>({...f,checkIn:availDates.checkIn,checkOut:availDates.checkOut}));}}}>{un?t("NO DISPONIBLE","UNAVAILABLE"):t("RESERVAR","BOOK NOW")}</button>);})()}
@@ -2650,7 +2837,7 @@ export default function App() {
           <Backdrop onClose={()=>{setBookModal(false);setBookError("");}}>
             <ModalBox>
               <div style={{height:170,position:"relative",overflow:"hidden"}}>
-                <img src={rm?.bedroom} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                <img src={coverPhoto(rm)} alt="" loading="lazy" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
                 <div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(26,15,8,.85),transparent 40%)"}}/>
                 <div style={{position:"absolute",bottom:"1.25rem",left:"1.75rem"}}>
                   <div style={{color:C.gold,fontSize:".62rem",fontFamily:"'Lato',sans-serif",letterSpacing:".2em",textTransform:"uppercase"}}>{t("SOLICITAR RESERVA","REQUEST BOOKING")}</div>
@@ -2729,8 +2916,9 @@ export default function App() {
 
       {/* Room photo lightbox */}
       {roomLightbox!==null&&(()=>{
-        const photos=[roomLightbox.bedroom,roomLightbox.bathroom];
-        const labels=[t("Dormitorio","Bedroom"),t("Baño","Bathroom")];
+        const gallery=roomLightbox.photos||[];
+        const photos=gallery.map(g=>g.url);
+        const labels=gallery.map(g=>g.label);
         const idx=roomLightbox.idx||0;
         return(
           <div style={{position:"fixed",inset:0,background:"rgba(26,15,8,.97)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={()=>setRoomLightbox(null)}>
@@ -2742,11 +2930,22 @@ export default function App() {
                   <div style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".68rem",letterSpacing:".15em",textTransform:"uppercase",marginTop:".18rem"}}>Caonabo 35 · {idx+1}/{photos.length}</div>
                 </div>
               </div>
-              <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:"1.5rem",marginTop:".85rem"}}>
-                {labels.map((lbl,i)=>(
-                  <button key={i} className={i===idx?"btn-gold":"btn-out"} style={{padding:".55rem 1.3rem"}} onClick={()=>setRoomLightbox({...roomLightbox,idx:i})}>{lbl}</button>
-                ))}
-              </div>
+              {photos.length>1&&(<>
+                {/* Prev/next sit on the image so the gallery works with any number of photos */}
+                <button aria-label="Anterior" onClick={()=>setRoomLightbox({...roomLightbox,idx:(idx-1+photos.length)%photos.length})}
+                  style={lightboxArrow("left")}>‹</button>
+                <button aria-label="Siguiente" onClick={()=>setRoomLightbox({...roomLightbox,idx:(idx+1)%photos.length})}
+                  style={lightboxArrow("right")}>›</button>
+                <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:".4rem",marginTop:".85rem",flexWrap:"wrap",maxHeight:100,overflowY:"auto"}}>
+                  {photos.map((src,i)=>(
+                    <button key={i} aria-label={labels[i]} onClick={()=>setRoomLightbox({...roomLightbox,idx:i})}
+                      style={{width:62,height:44,padding:0,border:`2px solid ${i===idx?C.gold:"transparent"}`,
+                              opacity:i===idx?1:0.55,background:"none",cursor:"pointer",flex:"0 0 auto"}}>
+                      <img src={src} alt="" loading="lazy" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                    </button>
+                  ))}
+                </div>
+              </>)}
             </div>
             <button onClick={()=>setRoomLightbox(null)} style={{position:"fixed",top:"1rem",right:"1rem",background:"rgba(42,31,22,.7)",border:`1px solid ${C.mahogany}`,color:C.taupe,fontSize:"1.5rem",cursor:"pointer",width:40,height:40,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:"50%"}}>×</button>
           </div>
@@ -2798,7 +2997,8 @@ export default function App() {
               <div>
                 <p style={{fontFamily:"'Lato',sans-serif",fontSize:".84rem",color:C.taupe,marginBottom:"1.25rem"}}>{t("Ingresa el email que usaste al hacer tu reserva.","Enter the email you used when making your booking.")}</p>
                 {guestLookupError&&<div className="error-banner" style={{marginBottom:"1rem"}}>{guestLookupError}</div>}
-                <div style={{marginBottom:"1.25rem"}}><FL>{t("Email de tu reserva","Booking Email")}</FL><Inp type="email" value={guestLookup.email} onChange={e=>setGuestLookup(p=>({...p,email:e.target.value}))} placeholder="tu@email.com"/></div>
+                <div style={{marginBottom:".9rem"}}><FL>{t("Email de tu reserva","Booking Email")}</FL><Inp type="email" value={guestLookup.email} onChange={e=>setGuestLookup(p=>({...p,email:e.target.value}))} placeholder="tu@email.com"/></div>
+                <div style={{marginBottom:"1.25rem"}}><FL>{t("Teléfono de tu reserva","Booking Phone")}</FL><Inp type="tel" value={guestLookup.phone} onChange={e=>setGuestLookup(p=>({...p,phone:e.target.value}))} placeholder="+1 809 000 0000"/></div>
                 <button className="btn-gold" style={{width:"100%"}} onClick={lookupGuestBooking} disabled={guestLookupLoading}>{guestLookupLoading?t("Buscando...","Searching..."):t("BUSCAR RESERVA","FIND BOOKING")}</button>
               </div>
             ):(
