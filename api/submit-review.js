@@ -31,7 +31,7 @@ export default async function handler(req, res) {
     if (!booking || !safeEqual(String(booking.review_token || ''), token)) return res.status(403).json({ error: 'Enlace no válido' });
 
     const today = todayInSantoDomingo();
-    const stayed = ['finalizada', 'checked_in'].includes(booking.status) && booking.check_out && String(booking.check_out) < today;
+    const stayed = ['finalizada', 'checked_in', 'confirmed'].includes(booking.status) && booking.check_out && String(booking.check_out) < today;
     if (!stayed) return res.status(403).json({ error: 'La reseña solo está disponible después de tu estadía' });
 
     const { data: existing, error: exErr } = await supabase.from('reviews').select('id').eq('booking_id', bookingId).limit(1);

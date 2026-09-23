@@ -68,5 +68,13 @@ export default async function handler(req, res) {
   let sync = null;
   try { sync = await runSync(supabase); } catch (e) { sync = { error: e.message }; }
 
-  return res.status(backup.error ? 500 : 200).json({ ok: !backup.error, backup, emails, sync });
+  // Daily rebuild so the prerendered pages crawlers read carry current prices and rooms.
+  let rebuild = 'skipped';
+  const hook = process.env.VERCEL_DEPLOY_HOOK_URL;
+  if (hook && hook.startsWith('https://api.vercel.com/')) {
+    try { const r = await fetch(hook, { method: 'POST' }); rebuild = r.ok ? 'triggered' : `http ${r.status}`; }
+    catch { rebuild = 'failed'; }
+  }
+
+  return res.status(backup.error ? 500 : 200).json({ ok: !backup.error, backup, emails, sync, rebuild });
 }
