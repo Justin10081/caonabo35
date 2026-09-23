@@ -9,7 +9,45 @@
       "schedule": "0 9 * * *"
     }
   ],
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "www.caonabo35.com" }],
+      "destination": "https://caonabo35.com/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/rooms",
+      "destination": "/en/rooms",
+      "permanent": true
+    }
+  ],
   "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "geolocation=(), microphone=(), payment=(self \"https://www.paypal.com\")" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains" },
+        {
+          "key": "Content-Security-Policy-Report-Only",
+          "value": "default-src 'self'; script-src 'self' https://*.paypal.com https://*.paypalobjects.com https://vercel.live; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com https://assets.vercel.com; img-src 'self' data: blob: https://tdvtbmyiicdjzwrgpwed.supabase.co https://*.gstatic.com https://*.googleapis.com https://*.google.com https://*.paypal.com https://*.paypalobjects.com https://vercel.live https://vercel.com; connect-src 'self' https://tdvtbmyiicdjzwrgpwed.supabase.co wss://tdvtbmyiicdjzwrgpwed.supabase.co https://*.paypal.com https://vercel.live wss://ws-us3.pusher.com; frame-src https://www.google.com https://maps.google.com https://*.paypal.com https://vercel.live; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+        }
+      ]
+    },
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
     {
       "source": "/img/(.*)",
       "headers": [
@@ -17,6 +55,18 @@
           "key": "Cache-Control",
           "value": "public, max-age=86400, stale-while-revalidate=604800"
         }
+      ]
+    },
+    {
+      "source": "/llms.txt",
+      "headers": [
+        { "key": "Content-Type", "value": "text/plain; charset=utf-8" }
+      ]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex" }
       ]
     }
   ]

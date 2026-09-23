@@ -1,0 +1,222 @@
+{
+  "_note": "Fallback for scripts/prerender.mjs when Supabase is unreachable at build time. Refresh: npm run seo:snapshot",
+  "snapshot_date": "2026-09-23",
+  "rooms": [
+    {
+      "id": "1",
+      "name": "Habitación 201",
+      "name_en": "Room 201",
+      "beds": "Queen",
+      "guests": 2,
+      "size": "66m²",
+      "description": "Habitación cómoda y elegante con baño privado.",
+      "amenities": [
+        "AC",
+        "Smart TV",
+        "Rain Shower"
+      ],
+      "price_override": 115,
+      "discount": 12,
+      "available": true,
+      "photos": [
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/1/1789654093032-4zob0y.jpg",
+          "label": "Foto 2"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/1/1789654092233-887qvw.jpg",
+          "label": "Foto 1"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/1/1789654106619-ek8dz3.jpg",
+          "label": "Foto 3"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/1/1789654107303-6nr2bb.jpg",
+          "label": "Foto 4"
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "name": "Habitación 202",
+      "name_en": "Room 202",
+      "beds": "Queen",
+      "guests": 2,
+      "size": "51m²",
+      "description": "Espacio acogedor con diseño moderno y todas las comodidades.",
+      "amenities": [
+        "AC",
+        "Smart TV",
+        "Rain Shower"
+      ],
+      "price_override": 90,
+      "discount": 10,
+      "available": true,
+      "photos": [
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/2/1789654149319-x1ighd.jpg",
+          "label": "Foto 4"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/2/1789654148768-lbkgyt.jpg",
+          "label": "Foto 3"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/2/1789654146884-7o5z0t.jpg",
+          "label": "Foto 1"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/2/1789654147862-l28gtc.jpg",
+          "label": "Foto 2"
+        }
+      ]
+    },
+    {
+      "id": "3",
+      "name": "Habitación 203",
+      "name_en": "Room 203",
+      "beds": "Queen",
+      "guests": 2,
+      "size": "61m²",
+      "description": "Amplia y luminosa, perfecta para una estadía relajada.",
+      "amenities": [
+        "AC",
+        "Smart TV",
+        "Rain Shower"
+      ],
+      "price_override": 115,
+      "discount": 12,
+      "available": true,
+      "photos": [
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/3/1789654189260-5c2o2u.jpg",
+          "label": "Foto 1"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/3/1789654190711-7ukekp.jpg",
+          "label": "Foto 3"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/3/1789654190046-shfafc.jpg",
+          "label": "Foto 2"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/3/1789654200291-bjgz0g.jpg",
+          "label": "Foto 4"
+        }
+      ]
+    },
+    {
+      "id": "4",
+      "name": "Habitación 205",
+      "name_en": "Room 205",
+      "beds": "Double",
+      "guests": 2,
+      "size": "52m²",
+      "description": "Confortable habitación con acabados de calidad.",
+      "amenities": [
+        "AC",
+        "Smart TV"
+      ],
+      "price_override": 90,
+      "discount": 10,
+      "available": true,
+      "photos": [
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/4/1789654305901-vptomq.jpg",
+          "label": "Foto 2"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/4/1789654305010-sqchft.jpg",
+          "label": "Foto 1"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/4/1789654315460-su4dvm.jpg",
+          "label": "Foto 3"
+        },
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/4/1789654316307-yg7ozd.jpg",
+          "label": "Foto 4"
+        }
+      ]
+    },
+    {
+      "id": "5",
+      "name": "Habitación 206",
+      "name_en": "Room 206",
+      "beds": "Double",
+      "guests": 2,
+      "size": "56m²",
+      "description": "Diseño refinado con orientación privilegiada.",
+      "amenities": [
+        "AC",
+        "Smart TV"
+      ],
+      "price_override": 90,
+      "discount": 10,
+      "available": true,
+      "photos": [
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/5/1789654344129-9uuyl7.jpg",
+          "label": "Foto 1"
+        }
+      ]
+    },
+    {
+      "id": "6",
+      "name": "Habitación 207",
+      "name_en": "Room 207",
+      "beds": "Double",
+      "guests": 2,
+      "size": "46m²",
+      "description": "Habitación acogedora a un precio accesible.",
+      "amenities": [
+        "AC",
+        "Smart TV"
+      ],
+      "price_override": 75,
+      "discount": 8,
+      "available": false,
+      "photos": [
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/6/1789654366233-73qter.jpg",
+          "label": "Foto 1"
+        }
+      ]
+    },
+    {
+      "id": "7",
+      "name": "Habitación 208",
+      "name_en": "Room 208",
+      "beds": "Double",
+      "guests": 2,
+      "size": "48m²",
+      "description": "Ideal para estadías cortas con todas las comodidades esenciales.",
+      "amenities": [
+        "AC",
+        "Smart TV"
+      ],
+      "price_override": 75,
+      "discount": 8,
+      "available": true,
+      "photos": [
+        {
+          "url": "https://tdvtbmyiicdjzwrgpwed.supabase.co/storage/v1/object/public/room-photos/7/1789654394897-9iikgu.jpg",
+          "label": "Foto 1"
+        }
+      ]
+    }
+  ],
+  "settings": {
+    "hotel_name": "Caonabo 35",
+    "address": "Av. Caonabo #35, 2do Piso\nSanto Domingo, República Dominicana",
+    "phone": "+1 (809) 603-3038",
+    "whatsapp": "18096033038",
+    "instagram": "@caonabo35",
+    "check_in_time": "3:00 PM",
+    "check_out_time": "12:00 PM",
+    "min_nights": 1,
+    "hero_subtitle": null
+  }
+}
