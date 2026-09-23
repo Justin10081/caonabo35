@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 // Modal behaviour for any overlay: focus moves in, Tab is trapped, Escape closes
 // (only the top-most dialog when they stack), background scroll is locked, and
@@ -17,17 +17,20 @@ export function focusablesIn(node) {
 export function useDialog(ref, onClose, labelledById) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  // Captured at first render: by the time effects run, an autoFocus child may already hold focus.
+  const [opener] = useState(() => (typeof document !== 'undefined' ? document.activeElement : null));
 
   useEffect(() => {
     const node = ref.current;
     if (!node) return undefined;
-    const opener = document.activeElement;
     const entry = { node };
     stack.push(entry);
     if (lockCount++ === 0) { savedOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden'; }
     if (labelledById && !document.getElementById(labelledById)) node.removeAttribute('aria-labelledby');
-    const auto = node.querySelector('[data-autofocus]');
-    (auto || node).focus({ preventScroll: true });
+    if (!node.contains(document.activeElement)) {
+      const auto = node.querySelector('[data-autofocus]');
+      (auto || node).focus({ preventScroll: true });
+    }
 
     const onKey = (e) => {
       if (stack[stack.length - 1] !== entry) return;
