@@ -1,15 +1,10 @@
-import { Resend } from 'resend';
+import {
+  serviceClient, sendEmail, esc, oneLine, safeEqual, bearerToken, isAdminToken,
+  parseId, UUID_RE, loadRoom, roomName, sendPush,
+} from './_lib/shared.js';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-// Every value interpolated into an email template goes through this. Without it a
-// caller-supplied name or note could inject markup/links into mail sent from the
-// hotel's verified domain.
-function esc(v) {
-  return String(v ?? '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
+// esc() (in _lib/shared.js) wraps every value interpolated into an email template: guest
+// names and notes are guest-supplied and must not inject markup into mail from the hotel domain.
 
 const FROM_EMAIL     = process.env.FROM_EMAIL     || 'Caonabo 35 <onboarding@resend.dev>';
 const REPLY_TO       = process.env.REPLY_TO       || process.env.ADMIN_EMAIL || '';
@@ -27,24 +22,10 @@ async function sendWhatsApp(message) {
   if (!phone || !apikey) return;
   try {
     const text = encodeURIComponent(message);
-    await fetch(`https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${text}&apikey=${apikey}`);
+    const r = await fetch(`https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}&text=${text}&apikey=${encodeURIComponent(apikey)}`);
+    if (!r.ok) console.error('CallMeBot error: HTTP', r.status);
   } catch (e) {
     console.error('CallMeBot error:', e.message);
-  }
-}
-
-// ── Push notification via ntfy.sh ─────────────────────────────────────────
-async function sendPushNotification(title, message) {
-  const topic = process.env.NTFY_TOPIC;
-  if (!topic) return;
-  try {
-    await fetch(`https://ntfy.sh/${topic}`, {
-      method: 'POST',
-      headers: { 'Title': title, 'Priority': 'high', 'Tags': 'hotel,bell', 'Content-Type': 'text/plain' },
-      body: message,
-    });
-  } catch (e) {
-    console.error('ntfy error:', e.message);
   }
 }
 
@@ -67,64 +48,88 @@ function bankTransferBlock() {
   `;
 }
 
+const TYPES = ['guest_confirmation', 'admin_notification', 'booking_confirmed'];
+const WINDOW_MS = 15 * 60 * 1000;
+const SENT_COLUMN = { guest_confirmation: 'confirmation_sent_at', admin_notification: 'admin_notified_at' };
+
+// guest_confirmation / admin_notification: only the browser that just created the booking holds
+// its readback_token, only for 15 minutes, and each message goes out at most once.
+// booking_confirmed: admins only. Content is always rendered from the DB row; no other request
+// field is read.
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  const raw = req.body || {};
+  const raw = req.body && typeof req.body === 'object' ? req.body : {};
   const { type } = raw;
+  if (!TYPES.includes(type)) return res.status(400).json({ error: 'Unknown type' });
 
-  // SECURITY. Two things were wrong here and both are closed below.
-  //
-  //  1. Only the two guest types were gated, so `admin_notification` was completely
-  //     unauthenticated — anyone could POST arbitrary content and have it delivered to
-  //     the owner FROM the hotel's own verified domain.
-  //  2. Nothing was escaped. Every booking/room field is client-supplied and was
-  //     interpolated straight into the email HTML, so a caller could author the entire
-  //     message body (fake bank details, links) under the hotel's identity.
-  //
-  // Fix: EVERY type must name a real booking id; the email is then rendered from the
-  // row in the database, never from what the caller sent. Anything still coming from
-  // the request is HTML-escaped.
-  const ALLOWED = ['guest_confirmation', 'booking_confirmed', 'admin_notification'];
-  if (!ALLOWED.includes(type)) return res.status(400).json({ error: 'Unknown type' });
+  const bookingId = parseId(raw.bookingId);
+  if (!bookingId) return res.status(400).json({ error: 'Invalid request' });
 
-  const bookingId = raw.booking?.id;
-  if (!bookingId) return res.status(400).json({ error: 'Missing booking id' });
+  let sb;
+  try { sb = serviceClient(); } catch { return res.status(500).json({ error: 'Server error' }); }
 
-  const { createClient } = await import('@supabase/supabase-js');
-  const sb = createClient(
-    process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
-  const { data: row } = await sb.from('bookings')
-    .select('id,guest,email,phone,room,check_in,check_out,nights,guests,total,notes')
+  if (type === 'booking_confirmed') {
+    const token = bearerToken(req);
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    if (!(await isAdminToken(sb, token))) return res.status(403).json({ error: 'Forbidden' });
+  } else if (typeof raw.readbackToken !== 'string' || !UUID_RE.test(raw.readbackToken)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const { data: row, error: rowErr } = await sb.from('bookings')
+    .select('id,guest,email,phone,room,check_in,check_out,nights,guests,total,notes,status,created_at,readback_token')
     .eq('id', bookingId).maybeSingle();
-  if (!row) return res.status(403).json({ error: 'No such booking' });
+  if (rowErr) { console.error('send-email lookup error:', rowErr.message); return res.status(500).json({ error: 'Server error' }); }
 
-  // Rate limit on emails actually sent for this booking, not on bookings created.
-  const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
-  const { count: recent } = await sb.from('bookings')
-    .select('*', { count: 'exact', head: true })
-    .eq('email', row.email).gte('created_at', oneHourAgo);
-  if ((recent || 0) > 5) return res.status(429).json({ error: 'Too many requests' });
+  if (type === 'booking_confirmed') {
+    if (!row) return res.status(404).json({ error: 'Not found' });
+  } else {
+    if (!row || !safeEqual(String(row.readback_token || ''), raw.readbackToken)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const age = Date.now() - Date.parse(row.created_at);
+    if (!(age >= -60000 && age <= WINDOW_MS)) return res.status(403).json({ error: 'Forbidden' });
+  }
 
-  // Rebuild the template inputs from the DB row so the caller controls none of them.
+  if (type !== 'admin_notification' && !String(row.email || '').trim()) {
+    return res.status(200).json({ ok: true, skipped: true });
+  }
+
+  // Atomic one-shot claim: only the request that flips the column from NULL sends.
+  const sentCol = SENT_COLUMN[type];
+  if (sentCol) {
+    const { data: claimed, error: claimErr } = await sb.from('bookings')
+      .update({ [sentCol]: new Date().toISOString() })
+      .eq('id', bookingId).is(sentCol, null)
+      .select('id');
+    if (claimErr) { console.error('send-email claim error:', claimErr.message); return res.status(500).json({ error: 'Server error' }); }
+    if (!claimed || claimed.length === 0) return res.status(200).json({ ok: true, skipped: true });
+  }
+
+  const roomRow = await loadRoom(sb, row.room).catch(() => null);
   const booking = {
     id: row.id, guest: esc(row.guest), email: esc(row.email), phone: esc(row.phone),
     checkIn: esc(row.check_in), checkOut: esc(row.check_out),
     nights: Number(row.nights) || 0, guests: Number(row.guests) || 0,
     total: Number(row.total) || 0, notes: esc(row.notes),
   };
-  const room = { name: esc(raw.room?.name || `Habitación ${row.room}`) };
+  const room = { name: esc(roomName(roomRow, row.room)) };
+  const plain = {
+    guest: oneLine(row.guest, 120), phone: oneLine(row.phone, 40), room: oneLine(roomName(roomRow, row.room), 80),
+    checkIn: oneLine(row.check_in, 10), checkOut: oneLine(row.check_out, 10), notes: oneLine(row.notes, 500),
+  };
+  const guestTo = String(row.email || '').trim();
+  const idem = (kind) => ({ idempotencyKey: `c35-${kind}-${row.id}` });
 
   try {
 
     // ── 1. Guest confirmation (booking received) ──────────────────────────
     if (type === 'guest_confirmation') {
-      await resend.emails.send({
+      await sendEmail({
         from: FROM_EMAIL,
-        reply_to: REPLY_TO || undefined,
-        to: booking.email,
+        replyTo: REPLY_TO || undefined,
+        to: guestTo,
         subject: `Reserva recibida – ${room.name} · Caonabo 35`,
         html: `
           <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#2A1F16;">
@@ -155,27 +160,28 @@ export default async function handler(req, res) {
             </div>
           </div>
         `,
-      });
+      }, idem('guest-confirmation'));
     }
 
     // ── 2. Admin notification (new booking) ──────────────────────────────
     if (type === 'admin_notification') {
       const waMsg =
         `🏨 *Nueva reserva – Caonabo 35*\n` +
-        `👤 ${booking.guest}\n` +
-        `🛏️ ${room.name}\n` +
-        `📅 ${booking.checkIn} → ${booking.checkOut} (${booking.nights} noche${booking.nights>1?'s':''})\n` +
+        `👤 ${plain.guest}\n` +
+        `🛏️ ${plain.room}\n` +
+        `📅 ${plain.checkIn} → ${plain.checkOut} (${booking.nights} noche${booking.nights>1?'s':''})\n` +
         `👥 ${booking.guests} huésped(es)\n` +
         `💰 $${booking.total} USD\n` +
-        `📞 ${booking.phone}` +
-        (booking.notes ? `\n📝 ${booking.notes}` : '');
+        `📞 ${plain.phone}` +
+        (plain.notes ? `\n📝 ${plain.notes}` : '');
 
       await sendWhatsApp(waMsg);
-      await sendPushNotification(
-        `🏨 Nueva reserva – ${room.name}`,
-        `${booking.guest} · ${booking.checkIn} → ${booking.checkOut} · $${booking.total}\nTel: ${booking.phone}`
+      await sendPush(
+        `🏨 Nueva reserva – ${plain.room}`,
+        `${plain.guest} · ${plain.checkIn} → ${plain.checkOut} · $${booking.total}\nTel: ${plain.phone}`,
+        { tags: ['hotel', 'bell'] }
       );
-      await resend.emails.send({
+      await sendEmail({
         from: FROM_EMAIL,
         to: ADMIN_EMAIL,
         subject: `🔔 Nueva reserva – ${room.name} (${booking.checkIn} → ${booking.checkOut})`,
@@ -196,15 +202,15 @@ export default async function handler(req, res) {
             <p style="margin-top:1.5rem;font-size:.85rem;color:#999;">Ingresa al panel de administración para confirmar esta reserva.</p>
           </div>
         `,
-      });
+      }, idem('admin-notification'));
     }
 
     // ── 3. Booking confirmed by admin ────────────────────────────────────
     if (type === 'booking_confirmed') {
-      await resend.emails.send({
+      await sendEmail({
         from: FROM_EMAIL,
-        reply_to: REPLY_TO || undefined,
-        to: booking.email,
+        replyTo: REPLY_TO || undefined,
+        to: guestTo,
         subject: `🎉 ¡Reserva confirmada! – ${room.name} · Caonabo 35`,
         html: `
           <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#2A1F16;">
@@ -245,9 +251,11 @@ export default async function handler(req, res) {
       });
     }
 
-    res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: true });
   } catch (err) {
-    console.error('send-email error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('send-email error:', err.message, err.provider || '');
+    // Nothing was delivered, so release the one-shot claim; a retry inside the window may send.
+    if (sentCol) await sb.from('bookings').update({ [sentCol]: null }).eq('id', bookingId).then(() => {}, () => {});
+    return res.status(500).json({ error: 'Email failed' });
   }
 }
