@@ -1,0 +1,25 @@
+# Search engines and AI answer engines are welcome
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /*?rev=
+
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: Claude-SearchBot
+User-agent: Claude-User
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+Allow: /
+Disallow: /api/
+Disallow: /*?rev=
+
+User-agent: GPTBot
+User-agent: ClaudeBot
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+Allow: /
+Disallow: /api/
+Disallow: /*?rev=
+
+Sitemap: https://caonabo35.com/sitemap.xml
