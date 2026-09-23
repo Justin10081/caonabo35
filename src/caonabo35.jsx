@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
 import MultiCalendar from "./MultiCalendar.jsx";
+import { escapeHtml, isSafeImageDataUrl, openImageWindow } from "./lib/html.js";
 
 const I = {
   terrace: "/img/terrace.jpg",
@@ -958,17 +959,10 @@ export default function App() {
   useEffect(()=>{
     if(!adminAuth) return;
     const mapRow = r=>({id:r.id,guest:r.guest,email:r.email,phone:r.phone,room:r.room,checkIn:r.check_in||r.checkIn,checkOut:r.check_out||r.checkOut,nights:r.nights,guests:r.guests,total:parseFloat(r.total)||0,status:r.status,paid:r.paid,source:r.source,notes:r.notes,idType:r.id_type||r.idType,idNumber:r.id_number||r.idNumber,idPhotoUrl:r.id_photo_url||r.idPhotoUrl||""});
+    // No broadcast listener: anyone with the public anon key can publish on a
+    // broadcast topic, so it could inject fake bookings into this screen.
     const ch = supabase.channel("bookings-live")
-      // Broadcast: instant notification sent by the booking form itself
-      .on("broadcast",{event:"new_booking"},({payload})=>{
-        const b = payload.booking;
-        setBookings(prev=>{
-          if(prev.find(x=>x.id===b.id)) return prev;
-          return [mapRow(b),...prev];
-        });
-        showToast("🔔 Nueva reserva: "+b.guest);
-      })
-      // postgres_changes: catches bookings from any other source (Airbnb, manual)
+      // postgres_changes: RLS-filtered row events for every new booking (web, Airbnb, manual)
       .on("postgres_changes",{event:"INSERT",schema:"public",table:"bookings"},p=>{
         const r=p.new;
         setBookings(prev=>{
@@ -1116,7 +1110,6 @@ export default function App() {
     // Use the REAL database id — PayPal deposit + the confirmation flow depend on it matching the row.
     const newBooking = {...bookingData, id:ins.id, checkIn:bookingData.check_in, checkOut:bookingData.check_out, idType:bookingData.id_type, idNumber:bookingData.id_number, idPhotoUrl:idPhotoUrl||""};
     setBookings(prev=>[newBooking,...prev]);
-    supabase.channel('bookings-broadcast').send({type:'broadcast',event:'new_booking',payload:{booking:newBooking}});
     fetch('/api/send-email',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({type:'guest_confirmation',booking:{...newBooking,guest:bookForm.name},room:rm})});
     fetch('/api/send-email',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -1388,29 +1381,25 @@ export default function App() {
 
   // ─── Print/export bookings ────────────────────────────────────────
   function printReport() {
+    // Guest names etc. are user input: escape everything written into the popup.
+    const e = escapeHtml;
     const rows = bookings.map(b=>{
       const rm = rooms.find(r=>r.id===b.room);
-      return `<tr style="border-bottom:1px solid #eee"><td>${b.guest}</td><td>${rm?.name||""}</td><td>${b.checkIn}</td><td>${b.checkOut}</td><td>${b.status}</td><td>${fmtMoney(b.total)}</td><td>${b.paid?"Pagado":"Pendiente"}</td></tr>`;
+      return `<tr style="border-bottom:1px solid #eee"><td>${e(b.guest)}</td><td>${e(rm?.name||"")}</td><td>${e(b.checkIn)}</td><td>${e(b.checkOut)}</td><td>${e(b.status)}</td><td>${e(fmtMoney(b.total))}</td><td>${b.paid?"Pagado":"Pendiente"}</td></tr>`;
     }).join("");
     const html = `<!DOCTYPE html><html><head><title>Reporte Caonabo 35</title>
       <style>body{font-family:Arial;padding:2cm}table{width:100%;border-collapse:collapse}th{background:#2A1F16;color:#C4973A;padding:8px;text-align:left}td{padding:8px}h1{color:#2A1F16}p{color:#8B6B4E;margin-bottom:1rem}</style>
       </head><body>
       <h1>Caonabo 35 — Reporte de Reservas</h1>
-      <p>Generado: ${new Date().toLocaleDateString()} · Total reservas: ${bookings.length} · Ingresos confirmados: ${fmtMoney(totalRev)}</p>
+      <p>Generado: ${e(new Date().toLocaleDateString())} · Total reservas: ${e(bookings.length)} · Ingresos confirmados: ${e(fmtMoney(totalRev))}</p>
       <table><thead><tr><th>Huésped</th><th>Habitación</th><th>Entrada</th><th>Salida</th><th>Estado</th><th>Total</th><th>Pago</th></tr></thead><tbody>${rows}</tbody></table>
       </body></html>`;
     const w = window.open("","_blank");
+    if(!w){ showToast("Permite ventanas emergentes para imprimir"); return; }
     w.document.write(html);
     w.document.close();
     w.print();
   }
-
-  // (Stripe return handler — kept here so hook order is consistent)
-  useEffect(()=>{
-    const p = new URLSearchParams(window.location.search);
-    if(p.get('stripe')==='success'){showToast('✅ ¡Pago recibido! Tu reserva está confirmada.');window.history.replaceState({},'',window.location.pathname);}
-    else if(p.get('stripe')==='cancelled'){showToast('Pago cancelado.');window.history.replaceState({},'',window.location.pathname);}
-  },[]);
 
   // ─── Auth screen ───────────────────────────────────────────────────
   if(view==="admin"&&!adminAuth) return(
@@ -2326,7 +2315,7 @@ export default function App() {
                     ))}
                   </div>
                   {detailB?.idNumber&&<div style={{padding:".85rem 1rem",background:"#FFF8E1",borderLeft:`3px solid ${C.gold}`,marginBottom:"1rem",fontFamily:"'Lato',sans-serif"}}><div style={{fontSize:".62rem",color:C.taupe,textTransform:"uppercase",letterSpacing:".12em",marginBottom:".3rem"}}>Identificación</div><div style={{fontWeight:700,color:C.ebony,fontSize:".9rem"}}>{detailB.idType==='cedula'?'🪪 Cédula':'🛂 Pasaporte'}: {detailB.idNumber}</div></div>}
-                  {detailB?.idPhotoUrl&&<div style={{padding:".85rem 1rem",background:"#FFF8E1",borderLeft:`3px solid ${C.gold}`,marginBottom:"1rem",fontFamily:"'Lato',sans-serif"}}><div style={{fontSize:".62rem",color:C.taupe,textTransform:"uppercase",letterSpacing:".12em",marginBottom:".5rem"}}>Foto de ID</div><img src={detailB.idPhotoUrl} alt="ID" style={{maxWidth:"100%",maxHeight:200,borderRadius:6,display:"block",border:`1px solid ${C.sand}`,cursor:"pointer"}} onClick={()=>{const w=window.open('','_blank');w.document.write('<html><body style="margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="'+detailB.idPhotoUrl+'" style="max-width:100%;max-height:100vh;object-fit:contain"></body></html>');w.document.close();}}/><button onClick={()=>{const w=window.open('','_blank');w.document.write('<html><body style="margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="'+detailB.idPhotoUrl+'" style="max-width:100%;max-height:100vh;object-fit:contain"></body></html>');w.document.close();}} style={{background:"none",border:"none",fontSize:".72rem",color:C.gold,marginTop:".4rem",display:"inline-block",cursor:"pointer",padding:0,fontFamily:"'Lato',sans-serif"}}>Ver foto completa ↗</button></div>}
+                  {detailB?.idPhotoUrl&&<div style={{padding:".85rem 1rem",background:"#FFF8E1",borderLeft:`3px solid ${C.gold}`,marginBottom:"1rem",fontFamily:"'Lato',sans-serif"}}><div style={{fontSize:".62rem",color:C.taupe,textTransform:"uppercase",letterSpacing:".12em",marginBottom:".5rem"}}>Foto de ID</div>{isSafeImageDataUrl(detailB.idPhotoUrl)?(<><img src={detailB.idPhotoUrl} alt="Foto de identificación" style={{maxWidth:"100%",maxHeight:200,borderRadius:6,display:"block",border:`1px solid ${C.sand}`,cursor:"pointer"}} onClick={()=>openImageWindow(detailB.idPhotoUrl,"Foto de ID")}/><button onClick={()=>openImageWindow(detailB.idPhotoUrl,"Foto de ID")} style={{background:"none",border:"none",fontSize:".72rem",color:C.gold,marginTop:".4rem",display:"inline-block",cursor:"pointer",padding:0,fontFamily:"'Lato',sans-serif"}}>Ver foto completa ↗</button></>):(<div style={{fontSize:".8rem",color:C.danger}}>Formato de foto no válido</div>)}</div>}
                   {detailB?.notes&&<div style={{padding:".85rem 1rem",background:C.smoke,borderLeft:`3px solid ${C.gold}`,marginBottom:"1.25rem"}}><p style={{fontStyle:"italic",color:C.ebony,fontFamily:"'Lato',sans-serif",fontSize:".86rem"}}>{detailB.notes}</p></div>}
                   {detailB?.status==="finalizada"&&<div className="success-banner" style={{marginBottom:"1rem",fontWeight:700,fontSize:".88rem"}}>✓ Estancia completada — Check-out realizado</div>}
                   <div style={{display:"flex",gap:".65rem",flexWrap:"wrap"}}>
