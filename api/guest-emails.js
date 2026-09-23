@@ -1,12 +1,10 @@
-import { createClient } from '@supabase/supabase-js';
-import { Resend } from 'resend';
+import { serviceClient, sendEmail, esc, isCronRequest, bearerToken, isAdminToken } from './_lib/shared.js';
 
 // Automated guest emails, sent once per booking:
 //  · pre-arrival  (<=3 days before check-in, and only if the stay runs past today)
 //  · post-stay    (starting the day AFTER check-out — never the same day they're here)
 // Deduped via bookings.prearrival_sent_at / review_email_sent_at. Runs from the daily backup
 // cron and silently when the admin opens the panel (which also catches same-day bookings).
-const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_EMAIL = process.env.FROM_EMAIL || 'reservas@caonabo35.com';
 const REPLY_TO   = process.env.REPLY_TO;
 const SITE = 'https://caonabo35.com';
@@ -21,60 +19,64 @@ const shell = (inner) => `<div style="font-family:Georgia,serif;max-width:560px;
 // Core logic, callable directly (from daily-backup) or via the HTTP handler below.
 export async function runGuestEmails(supabase) {
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santo_Domingo' });
-  const { data: settings } = await supabase.from('settings').select('whatsapp,guest_emails_on').eq('id', 1).single().catch(() => ({ data: null }));
+  // .single().catch() threw "catch is not a function" on supabase-js 2.x, so nothing ever sent.
+  const { data: settings, error: settingsErr } = await supabase.from('settings').select('whatsapp,guest_emails_on').eq('id', 1).maybeSingle();
+  if (settingsErr) return { error: 'settings unavailable' };
   if (!settings?.guest_emails_on) return { disabled: true };
   const wa = (settings?.whatsapp || '18096033038').replace(/\D/g, '');
   const waLink = `https://wa.me/${wa}`;
   const sent = { prearrival: 0, poststay: 0, errors: [] };
 
   // Pre-arrival: arriving within 3 days AND the stay runs past today (skips same-day-in-and-out).
-  const { data: arrivals } = await supabase.from('bookings')
+  const { data: arrivals, error: arrErr } = await supabase.from('bookings')
     .select('id,guest,email,check_in,check_out')
     .in('status', ['confirmed', 'checked_in'])
     .gte('check_in', today).lte('check_in', addDays(today, 3))
     .gt('check_out', today)
     .is('prearrival_sent_at', null);
+  if (arrErr) sent.errors.push('prearrival query failed');
   for (const b of (arrivals || [])) {
     if (!b.email) continue;
     try {
-      await resend.emails.send({
-        from: FROM_EMAIL, to: b.email, reply_to: REPLY_TO || undefined,
+      await sendEmail({
+        from: FROM_EMAIL, to: String(b.email).trim(), replyTo: REPLY_TO || undefined,
         subject: `Tu llegada a Caonabo 35 · ${b.check_in}`,
-        html: shell(`<p>Hola ${b.guest || ''},</p>
+        html: shell(`<p>Hola ${esc(b.guest || '')},</p>
           <p>¡Te esperamos pronto en <b>Caonabo 35</b>! Aquí los detalles de tu llegada:</p>
           <ul style="padding-left:1.1rem">
             <li><b>Dirección:</b> Av. Caonabo #35, 2do Piso, Santo Domingo</li>
-            <li><b>Check-in:</b> desde las 3:00 PM el ${b.check_in}</li>
-            <li><b>Check-out:</b> hasta las 12:00 PM el ${b.check_out}</li>
+            <li><b>Check-in:</b> desde las 3:00 PM el ${esc(b.check_in)}</li>
+            <li><b>Check-out:</b> hasta las 12:00 PM el ${esc(b.check_out)}</li>
           </ul>
           <p>Si necesitas indicaciones, estacionamiento o quieres coordinar tu llegada desde el aeropuerto, escríbenos por WhatsApp y con gusto te ayudamos.</p>
           <p style="text-align:center;margin:1.4rem 0"><a href="${waLink}" style="background:#25D366;color:#fff;padding:.7rem 1.4rem;border-radius:999px;text-decoration:none;font-family:Arial">Escríbenos por WhatsApp</a></p>
           <p>Un cordial saludo,<br/>El equipo de Caonabo 35</p>`),
-      });
+      }, { idempotencyKey: `c35-prearrival-${b.id}` });
       await supabase.from('bookings').update({ prearrival_sent_at: new Date().toISOString() }).eq('id', b.id);
       sent.prearrival++;
     } catch (e) { sent.errors.push(`prearrival ${b.id}: ${e.message}`); }
   }
 
   // Post-stay review request: checked out BEFORE today (never same-day), within the last 3 days.
-  const { data: departures } = await supabase.from('bookings')
-    .select('id,guest,email,check_out')
+  const { data: departures, error: depErr } = await supabase.from('bookings')
+    .select('id,guest,email,check_out,review_token')
     .in('status', ['finalizada', 'checked_in', 'confirmed'])
     .lt('check_out', today).gte('check_out', addDays(today, -3))
     .is('review_email_sent_at', null);
+  if (depErr) sent.errors.push('poststay query failed');
   for (const b of (departures || [])) {
-    if (!b.email) continue;
+    if (!b.email || !b.review_token) continue;
     try {
-      const reviewLink = `${SITE}/?rev=${b.id}`;
-      await resend.emails.send({
-        from: FROM_EMAIL, to: b.email, reply_to: REPLY_TO || undefined,
+      const reviewLink = `${SITE}/?rev=${encodeURIComponent(b.id)}&t=${encodeURIComponent(b.review_token)}`;
+      await sendEmail({
+        from: FROM_EMAIL, to: String(b.email).trim(), replyTo: REPLY_TO || undefined,
         subject: `¡Gracias por tu estadía en Caonabo 35!`,
-        html: shell(`<p>Hola ${b.guest || ''},</p>
+        html: shell(`<p>Hola ${esc(b.guest || '')},</p>
           <p>Gracias por hospedarte en <b>Caonabo 35</b>. Esperamos que hayas disfrutado tu estadía en Santo Domingo.</p>
           <p>¿Nos regalas 30 segundos para contarnos cómo estuvo? Tu reseña ayuda muchísimo a nuestra pequeña posada familiar.</p>
           <p style="text-align:center;margin:1.4rem 0"><a href="${reviewLink}" style="background:#C4973A;color:#2A1F16;padding:.75rem 1.6rem;border-radius:6px;text-decoration:none;font-family:Arial;font-weight:bold">Dejar mi reseña</a></p>
           <p>¡Esperamos recibirte de nuevo pronto!<br/>El equipo de Caonabo 35</p>`),
-      });
+      }, { idempotencyKey: `c35-poststay-${b.id}` });
       await supabase.from('bookings').update({ review_email_sent_at: new Date().toISOString() }).eq('id', b.id);
       sent.poststay++;
     } catch (e) { sent.errors.push(`poststay ${b.id}: ${e.message}`); }
@@ -83,12 +85,15 @@ export async function runGuestEmails(supabase) {
 }
 
 export default async function handler(req, res) {
-  const supabase = createClient(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
-  let allowed = false;
-  if (process.env.CRON_SECRET && bearer && bearer === process.env.CRON_SECRET) allowed = true;
-  else if (bearer) { try { const { data } = await supabase.auth.getUser(bearer); if (data?.user) allowed = true; } catch {} }
+  let supabase;
+  try { supabase = serviceClient(); } catch { return res.status(500).json({ error: 'Server error' }); }
+  const allowed = isCronRequest(req) || (await isAdminToken(supabase, bearerToken(req)));
   if (!allowed) return res.status(401).json({ error: 'Unauthorized' });
-  const result = await runGuestEmails(supabase);
-  return res.status(200).json({ ok: true, ...result });
+  try {
+    const result = await runGuestEmails(supabase);
+    return res.status(200).json({ ok: true, ...result });
+  } catch (e) {
+    console.error('guest-emails error:', e.message);
+    return res.status(500).json({ error: 'Guest emails failed' });
+  }
 }
