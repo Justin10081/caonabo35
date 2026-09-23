@@ -28,13 +28,14 @@ const ROOM_DEFAULTS = [
 const SETTINGS_DEFAULTS = {
   hotel_name: 'Caonabo 35',
   address: 'Av. Caonabo #35, 2do Piso\nSanto Domingo, República Dominicana',
-  phone: '+1 (809) 603-3038', whatsapp: '18096033038', email: 'liu.luis@me.com',
+  phone: '+1 (809) 603-3038', whatsapp: '18096033038',
   check_in_time: '3:00 PM', check_out_time: '12:00 PM', instagram: '@caonabo35',
   hero_subtitle: 'Diseño contemporáneo. Hospitalidad dominicana. Siete habitaciones únicas con alma.',
   min_nights: 1,
 };
 const ROOM_COLS = 'id,name,name_en,beds,guests,size,description,amenities,price_override,discount,available,photos';
-const SETTINGS_COLS = 'hotel_name,address,phone,whatsapp,email,instagram,check_in_time,check_out_time,min_nights,hero_subtitle';
+// settings.email is deliberately never read: it's a private address and no public contact email has been chosen.
+const SETTINGS_COLS = 'hotel_name,address,phone,whatsapp,instagram,check_in_time,check_out_time,min_nights,hero_subtitle';
 
 // Code-level facts the SPA states (AMENITIES + booking modal). Parking and "24/7" are deliberately left out
 // until the owner confirms them.
@@ -149,7 +150,7 @@ function buildModel(raw) {
       name: clean(s.hotel_name) || 'Caonabo 35',
       addressLines, street: addressLines[0],
       phone: clean(s.phone), phoneE164: phoneDigits ? `+${phoneDigits.length === 10 ? '1' + phoneDigits : phoneDigits}` : '',
-      whatsapp: waDigits, email: clean(s.email),
+      whatsapp: waDigits,
       instagram: handle ? `@${handle}` : '', instagramUrl: handle ? `https://www.instagram.com/${handle}/` : '',
       checkIn: clean(s.check_in_time), checkOut: clean(s.check_out_time),
       checkInISO: to24h(s.check_in_time), checkOutISO: to24h(s.check_out_time),
@@ -368,7 +369,7 @@ const COPY = {
     roomsLead: (m) => `${m.rooms.length} habitaciones con ${join(inEveryRoom(m, 'es'), 'es')}. Tarifa directa ${priceSpan(m, 'es')}.`,
     from: 'desde', perNight: 'noche', details: 'Ver detalles', compare: 'Comparar todas las habitaciones',
     spacesEye: 'Instalaciones', spacesH2: 'Espacios y servicios', faqEye: 'Antes de reservar', faqH2: 'Preguntas frecuentes',
-    contactEye: 'Contacto', contactH2: 'Encuéntranos', address: 'Dirección', waPhone: 'WhatsApp y teléfono', email: 'Correo electrónico', times: 'Check-in / check-out',
+    contactEye: 'Contacto', contactH2: 'Encuéntranos', address: 'Dirección', waPhone: 'WhatsApp y teléfono', times: 'Check-in / check-out',
     writeWa: 'Escríbenos por WhatsApp', footer: 'Hotel boutique en Santo Domingo, República Dominicana',
     home: 'Inicio', roomsTitle: 'Habitaciones y precios', h1rooms: 'Habitaciones y precios en Caonabo 35, Santo Domingo',
     roomsPageLead: (m) => `Las ${m.rooms.length} habitaciones tienen ${join(inEveryRoom(m, 'es'), 'es')}. Estas son nuestras tarifas directas por noche, en dólares estadounidenses (US$).`,
@@ -389,7 +390,7 @@ const COPY = {
     roomsLead: (m) => `${m.rooms.length} rooms, each with ${join(inEveryRoom(m, 'en'), 'en')}. Direct rates ${priceSpan(m, 'en')}.`,
     from: 'from', perNight: 'night', details: 'View details', compare: 'Compare all rooms',
     spacesEye: 'Facilities', spacesH2: 'Spaces & services', faqEye: 'Before you book', faqH2: 'Frequently asked questions',
-    contactEye: 'Contact', contactH2: 'Find us', address: 'Address', waPhone: 'WhatsApp & phone', email: 'Email', times: 'Check-in / check-out',
+    contactEye: 'Contact', contactH2: 'Find us', address: 'Address', waPhone: 'WhatsApp & phone', times: 'Check-in / check-out',
     writeWa: 'Message us on WhatsApp', footer: 'Boutique hotel in Santo Domingo, Dominican Republic',
     home: 'Home', roomsTitle: 'Rooms & rates', h1rooms: 'Rooms and rates at Caonabo 35, Santo Domingo',
     roomsPageLead: (m) => `All ${m.rooms.length} rooms have ${join(inEveryRoom(m, 'en'), 'en')}. These are our direct nightly rates, in US dollars (US$).`,
@@ -430,7 +431,6 @@ function contactBlock(m, pg) {
   const rows = [
     [c.address, h.addressLines.map(esc).join('<br>')],
     [c.waPhone, `<a href="${esc(waLink(m))}">${esc(h.phone || '+' + h.whatsapp)}</a>`],
-    h.email && [c.email, `<a href="mailto:${esc(h.email)}">${esc(h.email)}</a>`],
     h.instagramUrl && ['Instagram', `<a href="${esc(h.instagramUrl)}">${esc(h.instagram)}</a>`],
     h.checkIn && h.checkOut && [c.times, `${esc(h.checkIn)} / ${esc(h.checkOut)}`],
   ].filter(Boolean);
@@ -519,7 +519,7 @@ function jsonLd(pg, m, t) {
   const hotel = {
     '@type': 'Hotel', '@id': hotelId, name: h.name, alternateName: ['Caonabo35'],
     description: c.hotelDesc(m), url: `${ORIGIN}/`,
-    ...(h.phoneE164 && { telephone: h.phoneE164 }), ...(h.email && { email: h.email }),
+    ...(h.phoneE164 && { telephone: h.phoneE164 }),
     image: HOTEL_IMAGES.map(abs),
     address: { '@type': 'PostalAddress', streetAddress: h.street, addressLocality: 'Santo Domingo', addressCountry: 'DO' },
     ...(h.checkInISO && { checkinTime: h.checkInISO }), ...(h.checkOutISO && { checkoutTime: h.checkOutISO }),
@@ -669,7 +669,7 @@ ${m.rooms.map(room).join('\n')}
 
 - En línea / Online: ${pageUrl('rooms', 'es')}
 - WhatsApp: ${waLink(m)}
-${h.email ? `- Correo / Email: ${h.email}\n` : ''}${h.instagramUrl ? `- Instagram: ${h.instagramUrl}\n` : ''}`;
+${h.instagramUrl ? `- Instagram: ${h.instagramUrl}\n` : ''}`;
 }
 
 // ── Self-checks ──────────────────────────────────────────────────────
@@ -680,6 +680,8 @@ const FORBIDDEN = [
   [/gazcue/i, '"Gazcue"'], [/GeoCoordinates|"geo"|latitude|longitude|hasMap|18\.447|-69\.967/i, 'coordinates'],
   [/ascensor|elevator|estacionamiento|parking|seguridad 24|vigilad|guarded|\b\d+\s?(km|min)\b/i, 'unconfirmed facility/distance claim'],
 ];
+
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/;
 
 function visibleText(html) {
   return html.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<style[\s\S]*?<\/style>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
@@ -759,6 +761,11 @@ function selfCheck(outputs, m) {
       if (!hreflangs[target]) errs.push(`hreflang ${url} -> ${target}: target page not generated`);
       else if (Object.values(hreflangs[target]).indexOf(url) === -1) errs.push(`hreflang ${url} -> ${target}: not reciprocal`);
     }
+  }
+  // No email address may appear anywhere: page text, attributes (mailto:), JSON-LD, 404, sitemap or llms.txt.
+  for (const [file, content] of Object.entries(outputs)) {
+    const hit = content.match(EMAIL_RE) || content.match(/mailto:|"email"\s*:/i);
+    if (hit) errs.push(`${file}: contains an email address or email field (${hit[0]})`);
   }
   const nf = outputs['404.html'];
   if (!/noindex/.test(nf) || /type="module"/.test(nf) || (nf.match(/<h1[\s>]/g) || []).length !== 1) errs.push('404.html: must be noindex, static, one h1');
