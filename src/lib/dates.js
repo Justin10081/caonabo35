@@ -37,7 +37,8 @@ export function nightsBetween(checkIn, checkOut) {
 
 // Same rules the DB guard enforces, so the guest hears about them before submitting.
 // Returns null when the stay is valid, else { field, code }.
-export function validateStay(checkIn, checkOut, today = todaySD()) {
+// minNights comes from settings.min_nights (client-side only; the DB guard doesn't check it).
+export function validateStay(checkIn, checkOut, today = todaySD(), minNights = 1) {
   if (!isYmd(checkIn)) return { field: 'checkIn', code: 'missing_in' };
   if (!isYmd(checkOut)) return { field: 'checkOut', code: 'missing_out' };
   if (checkIn < today) return { field: 'checkIn', code: 'past' };
@@ -45,10 +46,23 @@ export function validateStay(checkIn, checkOut, today = todaySD()) {
   const n = nightsBetween(checkIn, checkOut);
   if (n < 1) return { field: 'checkOut', code: 'order' };
   if (n > MAX_NIGHTS) return { field: 'checkOut', code: 'too_long' };
+  const min = clampMinNights(minNights);
+  if (n < min) return { field: 'checkOut', code: 'min_nights', min };
+  return null;
+}
+
+export const clampMinNights = (v) => Math.min(MAX_NIGHTS, Math.max(1, Math.floor(Number(v)) || 1));
+
+// Admin entries may be in the past (recording earlier stays) but never zero or negative nights.
+export function validateAdminStay(checkIn, checkOut) {
+  if (!isYmd(checkIn)) return { field: 'checkIn', code: 'missing_in' };
+  if (!isYmd(checkOut)) return { field: 'checkOut', code: 'missing_out' };
+  if (nightsBetween(checkIn, checkOut) < 1) return { field: 'checkOut', code: 'order' };
   return null;
 }
 
 export const STAY_ERROR_TEXT = {
+  min_nights: ['La estadía mínima es de {n} noches.', 'The minimum stay is {n} nights.'],
   missing_in: ['Elige la fecha de entrada.', 'Choose a check-in date.'],
   missing_out: ['Elige la fecha de salida.', 'Choose a check-out date.'],
   past: ['La fecha de entrada no puede ser anterior a hoy.', 'Check-in can’t be earlier than today.'],
@@ -57,7 +71,7 @@ export const STAY_ERROR_TEXT = {
   too_long: ['Las reservas en línea son de hasta 30 noches. Para estadías más largas, escríbenos por WhatsApp.', 'Online bookings are up to 30 nights. For longer stays, message us on WhatsApp.'],
 };
 
-export function stayErrorText(code, lang) {
+export function stayErrorText(code, lang, n) {
   const m = STAY_ERROR_TEXT[code];
-  return m ? m[lang === 'en' ? 1 : 0] : '';
+  return m ? m[lang === 'en' ? 1 : 0].replace('{n}', String(n ?? '')) : '';
 }
