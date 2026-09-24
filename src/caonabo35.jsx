@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect, useId, createContext, useContext } from "react";
 import { supabase } from "./lib/supabase.js";
 import MultiCalendar from "./MultiCalendar.jsx";
-import { todaySD, addDays, isYmd, validateStay, stayErrorText, MAX_ADVANCE_DAYS } from "./lib/dates.js";
-import { nights, fmtMoney, calcPrice, quoteFor } from "./lib/pricing.js";
-import { bookingErrorKey, bookingErrorMessage } from "./lib/bookingErrors.js";
+import { todaySD, addDays, isYmd, validateStay, validateAdminStay, stayErrorText, clampMinNights, nightsBetween, MAX_ADVANCE_DAYS, MAX_NIGHTS } from "./lib/dates.js";
+import { nights, fmtMoney, quoteFor, activeRecurringSeason, nightKey } from "./lib/pricing.js";
+import { bookingErrorKey, bookingErrorMessage, isOverlapError, ADMIN_OVERLAP_TEXT } from "./lib/bookingErrors.js";
+import { hasBookingConflict, blockedNights, channelNights, CHANNEL_OF_SOURCE } from "./lib/availability.js";
+import { isRev, isOta, OTA_RATE, BOOKING_SOURCES, STATUS_OPTIONS, channelBreakdown, otaCommission as otaCommissionOf, bookingTotals, mapBookingRow, bookingsChanged } from "./lib/admin.js";
+import { waDigits, isWaNumber, formatWa, waLinkFor } from "./lib/phone.js";
 import { escapeHtml, isSafeImageDataUrl, openImageWindow } from "./lib/html.js";
 import { compressImage, compressToBlob } from "./lib/image.js";
 import { useDialog } from "./lib/dialog.js";
@@ -218,8 +221,6 @@ function roomPhotos(room){
 }
 const coverPhoto = (room) => roomPhotos(room)[0]?.url || "";
 
-// Admin still reads this load-time constant; the public site calls todaySD() at use time.
-const TODAY = todaySD();
 const ROOM_COLORS = ["#8B6B4E","#5C3D2E","#6B7A5A","#C4973A","#1565C0","#7B1FA2","#C62828"];
 const MONTH_NAMES_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const MONTH_NAMES_EN = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -228,32 +229,6 @@ const isLeap = y => (y%4===0&&y%100!==0)||y%400===0;
 const daysInMonth = (m,y) => m===1&&isLeap(y)?29:DAYS_IN_MONTH[m];
 const firstWeekday = (m,y) => new Date(y,m,1).getDay();
 const fmtDate = (y,m,d) => `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-
-// ─── Conflict check ───────────────────────────────────────────────────
-function hasConflict(bookings, roomId, checkIn, checkOut, excludeId=null) {
-  return bookings.some(b => {
-    if(b.id===excludeId) return false;
-    if(b.room!==roomId) return false;
-    if(b.status==="cancelled") return false;
-    // overlaps if new checkin < existing checkout AND new checkout > existing checkin
-    return checkIn < b.checkOut && checkOut > b.checkIn;
-  });
-}
-
-// True if any night in [checkIn, checkOut) is blocked by an imported OTA (Airbnb/Booking) calendar.
-// blockSet holds `${roomId}|${YYYY-MM-DD}` keys loaded from channel_blocks.
-function channelConflict(blockSet, roomId, checkIn, checkOut) {
-  if(!blockSet || !blockSet.size || !checkIn || !checkOut) return false;
-  const pad=n=>String(n).padStart(2,'0');
-  const d=new Date(checkIn+"T00:00:00"), stop=new Date(checkOut+"T00:00:00");
-  let g=0;
-  while(d<stop && g++<800){
-    const ymd=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-    if(blockSet.has(`${String(roomId)}|${ymd}`)) return true;
-    d.setDate(d.getDate()+1);
-  }
-  return false;
-}
 
 // ─── CSS ──────────────────────────────────────────────────────────────
 const css = `
@@ -385,7 +360,17 @@ a.btn-gold,a.btn-out{text-decoration:none}
   .mob-pb{padding-bottom:80px!important}
   .mob-2col{grid-template-columns:repeat(2,1fr)!important}
   .mob-wrap{flex-wrap:wrap!important}
+  .mob-only{display:inline-flex!important}
+  .adm-head h1{font-size:1.05rem!important}
 }
+.mob-only{display:none}
+.mtabs{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;scroll-snap-type:x proximity}
+.mtabs::-webkit-scrollbar{display:none}
+.mtab{flex:0 0 auto;min-width:64px;min-height:56px;padding:.35rem .55rem;background:none;border:none;border-top:2px solid transparent;color:#B8A898;font-family:'Lato',sans-serif;font-size:.6rem;letter-spacing:.03em;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.15rem;white-space:nowrap;scroll-snap-align:start}
+.mtab .ic{font-size:1.05rem;line-height:1}
+.mtab.act{color:#E8C97A;border-top-color:#C4973A;background:rgba(196,151,58,.1)}
+.mtab-fade{position:absolute;top:0;right:0;bottom:0;width:28px;pointer-events:none;background:linear-gradient(90deg,rgba(42,31,22,0),#2A1F16)}
+.adm-hbtn{min-height:40px;padding:0 .8rem;background:#F0EDE8;color:#2A1F16;border:1px solid #D4C5B0;font-family:'Lato',sans-serif;font-size:.7rem;font-weight:700;letter-spacing:.06em;cursor:pointer;align-items:center;gap:.3rem}
 `;
 
 // ─── Primitives ───────────────────────────────────────────────────────
@@ -567,6 +552,7 @@ function ConfirmationScreen({booking, room, lang, settings, onClose, onPaymentSu
 
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────
+const EMPTY_NEW_BOOKING = {guest:"",email:"",phone:"",room:1,checkIn:"",checkOut:"",guests:1,notes:"",source:"Direct",status:"confirmed",paid:false,total:"",totalTouched:false};
 const EMPTY_BOOK_FORM = {name:"",email:"",phone:"",checkIn:"",checkOut:"",guests:1,notes:"",idType:"cedula",idNumber:"",idPhotoFile:null,idPhotoData:"",privacyAccepted:false};
 const langFromPath = (p) => /^\/en(\/|$)/.test(p||"") ? "en" : "es";
 const pageFromPath = (p) => /^\/(habitaciones|en\/rooms|rooms)(\/|$)/.test(p||"") ? "rooms" : "home";
@@ -600,10 +586,11 @@ export default function App({initialLang, initialPage} = {}) {
   const [pwdError,setPwdError] = useState("");
   const [adminTab,setAdminTab] = useState(()=>{ try{return sessionStorage.getItem('c35_tab')||"dashboard";}catch{return "dashboard";} });
   useEffect(()=>{ try{sessionStorage.setItem('c35_tab',adminTab);}catch{} },[adminTab]);
+  useEffect(()=>{ try{document.querySelector('.mtab.act')?.scrollIntoView({block:"nearest",inline:"center"});}catch{} },[adminTab,view]);
   const [calView,setCalView] = useState("mes");       // unified Calendario hub: "mes" (month grid) | "precios" (per-night grid)
   const [resSearch,setResSearch] = useState("");        // search across ALL reservations from the Calendario hub
   const [gridVersion,setGridVersion] = useState(0);   // bumped on room_nights realtime change → forces the price grid to reload live
-  const [channelBlocks,setChannelBlocks] = useState(()=>new Set());  // `${roomId}|YYYY-MM-DD` imported from Airbnb/Booking iCal
+  const [channelBlocks,setChannelBlocks] = useState(()=>new Map());  // `${roomId}|YYYY-MM-DD` → source, imported from Airbnb/Booking iCal
   const [channelFeeds,setChannelFeeds] = useState([]);               // configured channel_calendars rows
   const [feedForm,setFeedForm] = useState({room_id:"",source:"airbnb",ics_url:"",label:""});
   const [syncing,setSyncing] = useState(false);
@@ -628,7 +615,6 @@ export default function App({initialLang, initialPage} = {}) {
   const [messagesLoading,setMessagesLoading] = useState(true);
   const [expenses,setExpenses] = useState([]);
   const [expensesLoading,setExpensesLoading] = useState(true);
-  const [roomAvail,setRoomAvail] = useState({}); // manual availability overrides per room
   const [reviews,setReviews] = useState(REVIEWS_INIT);   // sample testimonials — kept as public filler until real ones accumulate
   const [dbReviews,setDbReviews] = useState([]);          // real, verified guest reviews from the DB
   const [reviewParam,setReviewParam] = useState(()=>{ try{return new URLSearchParams(window.location.search).get('rev');}catch{return null;} });
@@ -666,9 +652,6 @@ export default function App({initialLang, initialPage} = {}) {
   const [bookedRoomIds,setBookedRoomIds] = useState(null); // null = not checked yet
   const [availLoading,setAvailLoading] = useState(false);
   const [availError,setAvailError] = useState("");
-  const [discounts,setDiscounts] = useState([]);
-  const [discountCode,setDiscountCode] = useState("");
-  const [appliedDiscount,setAppliedDiscount] = useState(null);
   const [roomPriceOverrides,setRoomPriceOverrides] = useState({});
   const [seasons,setSeasons] = useState([]);
   const [editSeasons,setEditSeasons] = useState(false);
@@ -677,12 +660,12 @@ export default function App({initialLang, initialPage} = {}) {
   const [newRange,setNewRange] = useState({name:'',room:'all',start:'',end:'',price:''});
   const [editRoomPrices,setEditRoomPrices] = useState({});
   const [priceEdits,setPriceEdits] = useState({});
-  const [addDiscountForm,setAddDiscountForm] = useState({code:"",label:"",type:"percent",amount:""});
-  const [discountsLoading,setDiscountsLoading] = useState(false);
   // Admin UI
   const [editBooking,setEditBooking] = useState(null);
   const [newBookModal,setNewBookModal] = useState(false);
-  const [newB,setNewB] = useState({guest:"",email:"",phone:"",room:1,checkIn:"",checkOut:"",guests:1,notes:"",source:"Direct",status:"confirmed"});
+  const [newB,setNewB] = useState(EMPTY_NEW_BOOKING);
+  const [bookingAction,setBookingAction] = useState(null);   // booking awaiting "cancel or delete?"
+  const [saving,setSaving] = useState(false);
   const [newBError,setNewBError] = useState("");
   const [editRoom,setEditRoom] = useState(null);
   const [editRoomD,setEditRoomD] = useState(null);
@@ -696,6 +679,7 @@ export default function App({initialLang, initialPage} = {}) {
   const [expFilter,setExpFilter] = useState("all");
   const [editSettings,setEditSettings] = useState(false);
   const [settDraft,setSettDraft] = useState(SETTINGS_INIT);
+  const [settErr,setSettErr] = useState("");
   const [addMsgModal,setAddMsgModal] = useState(false);
   const [newMsg,setNewMsg] = useState({guest:"",email:"",phone:"",message:""});
   const [editReview,setEditReview] = useState(null);
@@ -703,18 +687,52 @@ export default function App({initialLang, initialPage} = {}) {
   const [detailB,setDetailB] = useState(null);
   const [editBError,setEditBError] = useState("");
 
-  // Calendar — single month nav
-  const [calYear,setCalYear] = useState(2026);
-  const [calMonth,setCalMonth] = useState(2); // 0-indexed, 2 = March
+  // Calendar — single month nav, opens on the current month
+  const [calYear,setCalYear] = useState(()=>Number(todaySD().slice(0,4)));
+  const [calMonth,setCalMonth] = useState(()=>Number(todaySD().slice(5,7))-1); // 0-indexed
+
+  // Live hotel date: the arrivals/departures panels must roll over at midnight without a reload.
+  const [TODAY,setTodayYmd] = useState(todaySD);
+  useEffect(()=>{
+    const tick = ()=>{ const d=todaySD(); setTodayYmd(prev=>prev===d?prev:d); };
+    const iv = setInterval(tick, 60000);
+    const onVis = ()=>{ if(document.visibilityState==="visible") tick(); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", tick);
+    return ()=>{ clearInterval(iv); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("focus", tick); };
+  },[]);
+
+  // room_nights (per-night price / closed nights) for the date ranges in use, loaded on demand
+  // — a whole-year fetch would hit PostgREST's 1000-row cap. Anon can read this table.
+  const [nightMap,setNightMap] = useState(()=>new Map());
+  const nightCache = useRef(new Map());   // "from|to" → Promise<Map>
+  const ensureNights = (from, to) => {
+    if(!isYmd(from)||!isYmd(to)||from>=to) return Promise.resolve(nightMap);
+    const key = `${from}|${to}`;
+    if(!nightCache.current.has(key)){
+      nightCache.current.set(key, (async()=>{
+        const {data,error} = await supabase.from("room_nights").select("room_id,date,price,available").gte("date",from).lt("date",to);
+        if(error||!data){ nightCache.current.delete(key); return null; }
+        const add = new Map(data.map(r=>[nightKey(r.room_id,r.date),{price:r.price,available:r.available}]));
+        setNightMap(prev=>{
+          const merged = new Map(prev);
+          for(let d=from; d<to; d=addDays(d,1)) for(const r of rooms) merged.delete(nightKey(r.id,d));
+          add.forEach((v,k)=>merged.set(k,v));
+          return merged;
+        });
+        return add;
+      })());
+    }
+    return nightCache.current.get(key);
+  };
+  useEffect(()=>{ if(gridVersion) nightCache.current.clear(); },[gridVersion]);
+  useEffect(()=>{ if(editBooking) ensureNights(editBooking.checkIn,editBooking.checkOut); },[editBooking?.checkIn,editBooking?.checkOut,gridVersion]);
+  useEffect(()=>{ if(newBookModal) ensureNights(newB.checkIn,newB.checkOut); },[newBookModal,newB.checkIn,newB.checkOut,gridVersion]);
 
   const t = (es,en) => lang==="es"?es:en;
   const showToast = (msg) => { setToast(msg); setTimeout(()=>setToast(""),3200); };
 
-  // Derived
-  // Revenue-earning statuses: a completed (finalizada) stay still earned money, so it MUST count.
-  // Before this, only confirmed/checked_in counted — so every checked-out stay vanished from analytics.
-  const REV_STATUSES = ["confirmed","checked_in","finalizada"];
-  const isRev = b => REV_STATUSES.includes(b.status);
+  // Derived — isRev (lib/admin.js): a completed (finalizada) stay still earned money, so it counts.
   const confirmed = bookings.filter(isRev);
   const totalRev = confirmed.reduce((s,b)=>s+b.total,0);
   const totalExp = expenses.reduce((s,e)=>s+e.amount,0);
@@ -726,7 +744,7 @@ export default function App({initialLang, initialPage} = {}) {
   // ── Owner KPIs: ADR (avg nightly rate), RevPAR (revenue per available room, trailing 30d), net-of-OTA-commission ──
   const revNights = confirmed.reduce((s,b)=>s+nights(b.checkIn,b.checkOut),0);
   const adr = revNights ? Math.round(totalRev/revNights) : 0;
-  const otaCommission = Math.round(bookings.filter(b=>b.source!=="Direct"&&isRev(b)).reduce((s,b)=>s+b.total*.175,0));
+  const otaCommission = otaCommissionOf(bookings);   // Airbnb + Booking.com only
   const netRevenue = totalRev - otaCommission;
   const revpar30 = (()=>{
     const days=30, avail=rooms.length*days; if(!avail) return 0;
@@ -757,16 +775,7 @@ export default function App({initialLang, initialPage} = {}) {
   async function fetchBookings(){
     setBookingsLoading(true);
     const{data,error}=await supabase.from("bookings").select("*").order("created_at",{ascending:false});
-    if(!error&&data){
-      setBookings(data.map(r=>({
-        id:r.id,guest:r.guest,email:r.email,phone:r.phone,
-        room:r.room,checkIn:r.check_in,checkOut:r.check_out,
-        nights:r.nights,guests:r.guests,total:r.total,
-        status:r.status,paid:r.paid,source:r.source,notes:r.notes,
-        idType:r.id_type,idNumber:r.id_number,idPhotoUrl:r.id_photo_url||"",
-        createdAt:r.created_at
-      })));
-    }
+    if(!error&&data) setBookings(data.map(mapBookingRow));
     setBookingsLoading(false);
   }
   useEffect(()=>{
@@ -778,7 +787,6 @@ export default function App({initialLang, initialPage} = {}) {
     if(!adminAuth) return;
     fetchBookings();
     fetchExpenses();
-    fetchDiscounts();
     fetchMessages();
     fetchChannels();
   },[adminAuth]);
@@ -804,12 +812,35 @@ export default function App({initialLang, initialPage} = {}) {
     const {data} = await supabase.from('reviews').select('*').order('created_at',{ascending:false});
     if(data) setDbReviews(data);
   }
-  async function sendGuestEmails(){
+  // Admin-only API routes verify this bearer token server-side (admins allow-list).
+  async function authHeaders(extra={}){
     try{
       const {data:{session}} = await supabase.auth.getSession();
-      if(!session?.access_token) return;
-      await fetch('/api/guest-emails',{method:'POST',headers:{Authorization:`Bearer ${session.access_token}`}});
+      return session?.access_token ? {...extra,Authorization:`Bearer ${session.access_token}`} : {...extra};
+    }catch{ return {...extra}; }
+  }
+  async function sendGuestEmails(){
+    try{
+      const headers = await authHeaders();
+      if(!headers.Authorization) return;
+      await fetch('/api/guest-emails',{method:'POST',headers});
     }catch{}
+  }
+  async function exportIcal(room){
+    try{
+      const headers = await authHeaders();
+      if(!headers.Authorization){ showToast("❌ Sesión expirada — vuelve a entrar"); return; }
+      const res = await fetch('/api/export-ical'+(room?`?room=${encodeURIComponent(room.id)}`:''),{headers});
+      if(!res.ok){ showToast("❌ No se pudo exportar el calendario"); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = room ? `caonabo35-${String(room.name||room.id).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\w-]+/g,'-').toLowerCase()}.ics` : 'caonabo35.ics';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 10000);
+      showToast("Calendario descargado ✓");
+    }catch{ showToast("❌ No se pudo exportar el calendario"); }
   }
 
   // ─── Channel calendar sync (Airbnb / Booking.com iCal import) ───
@@ -820,7 +851,7 @@ export default function App({initialLang, initialPage} = {}) {
       supabase.from('settings').select('guest_emails_on').eq('id',1).maybeSingle(),
     ]);
     if(feeds) setChannelFeeds(feeds);
-    if(blocks) setChannelBlocks(new Set(blocks.map(b=>`${String(b.room_id)}|${b.date}`)));
+    if(blocks) setChannelBlocks(new Map(blocks.map(b=>[`${String(b.room_id)}|${b.date}`,b.source])));
     if(st) setEmailsOn(!!st.guest_emails_on);
   }
   async function toggleGuestEmails(){
@@ -834,8 +865,7 @@ export default function App({initialLang, initialPage} = {}) {
   async function syncChannels(silent=false){
     setSyncing(true);
     try{
-      const {data:{session}} = await supabase.auth.getSession();
-      const res = await fetch('/api/sync-calendars',{method:'POST',headers:session?.access_token?{Authorization:`Bearer ${session.access_token}`}:{}});
+      const res = await fetch('/api/sync-calendars',{method:'POST',headers:await authHeaders()});
       const j = await res.json().catch(()=>({}));
       await fetchChannels();
       if(!silent){ if(res.ok) showToast(`Sincronizado ✓ ${j.blocks??0} noche(s) de otros canales`); else showToast('❌ '+(j.error||'Error al sincronizar')); }
@@ -869,7 +899,7 @@ export default function App({initialLang, initialPage} = {}) {
     setMessagesLoading(true);
     const{data,error}=await supabase.from("messages").select("*").order("created_at",{ascending:false});
     if(!error&&data){
-      setMessages(data.map(r=>({id:r.id,guest:r.guest,email:r.email||r.phone,phone:r.phone,message:r.body||r.subject||"",date:r.created_at?r.created_at.slice(0,10):r.date||TODAY,read:r.read})));
+      setMessages(data.map(r=>({id:r.id,guest:r.guest,email:r.email||"",phone:r.phone||"",message:r.body||r.subject||"",date:r.created_at?r.created_at.slice(0,10):"",read:!!r.read})));
     }
     setMessagesLoading(false);
   }
@@ -882,14 +912,14 @@ export default function App({initialLang, initialPage} = {}) {
       propName: data.hotel_name || SETTINGS_INIT.propName,
       address: data.address || SETTINGS_INIT.address,
       phone: data.phone || SETTINGS_INIT.phone,
-      whatsapp: data.whatsapp || SETTINGS_INIT.whatsapp,
+      whatsapp: waDigits(data.whatsapp) || SETTINGS_INIT.whatsapp,
       email: data.email || SETTINGS_INIT.email,
       checkIn: data.check_in_time || SETTINGS_INIT.checkIn,
       checkOut: data.check_out_time || SETTINGS_INIT.checkOut,
       instagram: data.instagram || SETTINGS_INIT.instagram,
       heroSubtitle: data.hero_subtitle || SETTINGS_INIT.heroSubtitle,
-      minNights: data.min_nights || SETTINGS_INIT.minNights,
-      taxRate: data.tax_rate || SETTINGS_INIT.taxRate,
+      minNights: clampMinNights(data.min_nights ?? SETTINGS_INIT.minNights),
+      taxRate: data.tax_rate != null && Number.isFinite(Number(data.tax_rate)) ? Number(data.tax_rate) : SETTINGS_INIT.taxRate,   // a stored 0 stays 0
       currency: SETTINGS_INIT.currency,
     });
     if(data.seasons_json) {
@@ -897,44 +927,10 @@ export default function App({initialLang, initialPage} = {}) {
     }
   }
 
-  // ─── Fetch expenses from Supabase on mount ───────────────────────
-  async function fetchDiscounts() {
-    setDiscountsLoading(true);
-    const {data} = await supabase.from('discounts').select('*').order('created_at',{ascending:false});
-    setDiscounts(data||[]);
-    setDiscountsLoading(false);
-  }
-  async function addDiscount() {
-    if(!addDiscountForm.code||!addDiscountForm.amount) return showToast("Completa código y monto");
-    const {data,error} = await supabase.from('discounts').insert([{
-      code:addDiscountForm.code.toUpperCase().trim(),
-      label:addDiscountForm.label,
-      type:addDiscountForm.type,
-      amount:parseFloat(addDiscountForm.amount),
-      active:true,
-    }]).select().single();
-    if(error) return showToast("Error: "+error.message);
-    setDiscounts(prev=>[data,...prev]);
-    setAddDiscountForm({code:"",label:"",type:"percent",amount:""});
-    showToast("Descuento creado ✓");
-  }
-  async function deleteDiscount(id) {
-    if(!window.confirm("Eliminar este descuento?")) return;
-    setDiscounts(prev=>prev.filter(d=>d.id!==id));
-    await supabase.from('discounts').delete().eq('id',id);
-    showToast("Eliminado");
-  }
-  async function toggleDiscount(id, active) {
-    setDiscounts(prev=>prev.map(d=>d.id===id?{...d,active}:d));
-    await supabase.from('discounts').update({active}).eq('id',id);
-  }
   async function fetchRoomPrices() {
     // select('*') so an English description column (description_en), if the owner adds one, is picked up.
     const {data,error} = await supabase.from('rooms').select('*');
     if(error||!data){ setRoomsLoaded(true); return; }
-    const avail = {};
-    data.forEach(row=>{ if(row.available!=null) avail[row.id]=row.available; });
-    setRoomAvail(prev=>({...prev,...avail}));
     const overrides = {};
     const discMap = {};
     const byId = {};
@@ -1011,14 +1007,6 @@ export default function App({initialLang, initialPage} = {}) {
     setPriceEdits({});
     showToast("Precios actualizados ✓");
   }
-  function applyDiscountCode() {
-    const code = discountCode.trim().toUpperCase();
-    const disc = discounts.find(d=>d.code===code&&d.active);
-    if(!disc) return showToast("Código inválido o inactivo");
-    setAppliedDiscount(disc);
-    const msg = disc.type==='percent' ? ("Descuento "+disc.amount+"% aplicado") : ("Descuento $"+disc.amount+" aplicado");
-    showToast(msg);
-  }
   async function fetchExpenses(){
     setExpensesLoading(true);
     const{data,error}=await supabase.from("expenses").select("*").order("date",{ascending:false});
@@ -1043,7 +1031,6 @@ export default function App({initialLang, initialPage} = {}) {
   // ─── Supabase Realtime — live booking updates in admin ─────────
   useEffect(()=>{
     if(!adminAuth) return;
-    const mapRow = r=>({id:r.id,guest:r.guest,email:r.email,phone:r.phone,room:r.room,checkIn:r.check_in||r.checkIn,checkOut:r.check_out||r.checkOut,nights:r.nights,guests:r.guests,total:parseFloat(r.total)||0,status:r.status,paid:r.paid,source:r.source,notes:r.notes,idType:r.id_type||r.idType,idNumber:r.id_number||r.idNumber,idPhotoUrl:r.id_photo_url||r.idPhotoUrl||""});
     // No broadcast listener: anyone with the public anon key can publish on a
     // broadcast topic, so it could inject fake bookings into this screen.
     const ch = supabase.channel("bookings-live")
@@ -1052,22 +1039,21 @@ export default function App({initialLang, initialPage} = {}) {
         const r=p.new;
         setBookings(prev=>{
           if(prev.find(x=>x.id===r.id)) return prev;
-          return [mapRow(r),...prev];
+          return [mapBookingRow(r),...prev];
         });
         showToast("🔔 Nueva reserva: "+r.guest);
       })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"bookings"},p=>{
         const r=p.new;
-        setBookings(prev=>prev.map(b=>b.id===r.id?mapRow(r):b));
+        setBookings(prev=>prev.map(b=>b.id===r.id?mapBookingRow(r):b));
       })
       .on("postgres_changes",{event:"DELETE",schema:"public",table:"bookings"},p=>{
         setBookings(prev=>prev.filter(b=>b.id!==p.old?.id));
       })
       // Live everything: one admin's edit shows on another admin's screen instantly (no refresh).
-      .on("postgres_changes",{event:"*",schema:"public",table:"rooms"},()=>{fetchRoomPrices();fetchRoomAvailability();})
+      .on("postgres_changes",{event:"*",schema:"public",table:"rooms"},()=>fetchRoomPrices())
       .on("postgres_changes",{event:"*",schema:"public",table:"messages"},()=>fetchMessages())
       .on("postgres_changes",{event:"*",schema:"public",table:"expenses"},()=>fetchExpenses())
-      .on("postgres_changes",{event:"*",schema:"public",table:"discounts"},()=>fetchDiscounts())
       .on("postgres_changes",{event:"*",schema:"public",table:"settings"},()=>fetchSettings())
       .on("postgres_changes",{event:"*",schema:"public",table:"channel_blocks"},()=>fetchChannels())
       .on("postgres_changes",{event:"*",schema:"public",table:"reviews"},()=>fetchDbReviews())
@@ -1087,21 +1073,9 @@ export default function App({initialLang, initialPage} = {}) {
       if(document.visibilityState!=="visible") return;   // don't hammer the DB in the background
       const{data}=await supabase.from("bookings").select("*").order("created_at",{ascending:false});
       if(!data||!alive) return;
-      const mapped = data.map(r=>({
-        id:r.id,guest:r.guest,email:r.email,phone:r.phone,
-        room:r.room,checkIn:r.check_in,checkOut:r.check_out,
-        nights:r.nights,guests:r.guests,total:r.total,
-        status:r.status,paid:r.paid,source:r.source,notes:r.notes,
-        idType:r.id_type,idNumber:r.id_number,idPhotoUrl:r.id_photo_url||"",
-        createdAt:r.created_at
-      }));
-      setBookings(prev=>{
-        // Only update if something actually changed (new booking or status change)
-        const hasNew = mapped.some(m=>!prev.find(p=>p.id===m.id));
-        const hasUpdate = mapped.some(m=>{const p=prev.find(x=>x.id===m.id);return p&&(p.status!==m.status||p.paid!==m.paid);});
-        if(hasNew||hasUpdate) return mapped;
-        return prev;
-      });
+      const mapped = data.map(mapBookingRow);
+      // Any field edited on another device (dates, room, total, contact…) or a deleted row counts.
+      setBookings(prev=>bookingsChanged(prev,mapped)?mapped:prev);
     };
     const poll = setInterval(syncBookings, 30000);
     const onVis = ()=>{ if(document.visibilityState==="visible") syncBookings(); };
@@ -1121,8 +1095,14 @@ export default function App({initialLang, initialPage} = {}) {
   async function adminLogout(){
     await supabase.auth.signOut();
     setAdminAuth(false);
-    sessionStorage.setItem('c35_view','public');
+    try{sessionStorage.setItem('c35_view','public');}catch{}
     setView("public");
+  }
+  // Leaves the session alone: the footer "Admin" link brings the owner straight back.
+  function viewPublicSite(){
+    try{sessionStorage.setItem('c35_view','public');}catch{}
+    setView("public");
+    window.scrollTo(0,0);
   }
 
   // ─── Guest portal lookup ─────────────────────────────────────────────
@@ -1160,8 +1140,11 @@ export default function App({initialLang, initialPage} = {}) {
 
   // ─── Public booking request ─────────────────────────────────────────
   const roomById = (id) => rooms.find(r=>r.id===id);
-  const isRoomClosed = (r) => !!r && (roomAvail[r.id]===false || r.available===false);
-  const quoteRoom = (r, cin, cout) => quoteFor(r, cin, cout, {seasons});
+  // rooms[].available is the DB flag (rooms.available) — the only source of "closed".
+  const isRoomClosed = (r) => !!r && r.available===false;
+  const minNights = clampMinNights(settings.minNights);
+  const quoteRoom = (r, cin, cout, roomNights = nightMap) => quoteFor(r, cin, cout, {seasons, roomNights});
+  const nightsClosed = (r, cin, cout, roomNights = nightMap) => !!r && blockedNights(roomNights, r.id, cin, cout).length>0;
 
   function openBooking(room){
     if(!room) return;
@@ -1178,28 +1161,34 @@ export default function App({initialLang, initialPage} = {}) {
   function closeBooking(){ if(submitting) return; setBookModal(false); setBookError(""); setFieldErrors({}); }
 
   // Check the chosen dates for this room before asking for contact/ID details.
-  // The browser can't read bookings (RLS), so this goes through /api/check-availability.
+  // The browser can't read bookings (RLS), so this goes through /api/check-availability;
+  // nights the owner closed in the per-night grid (room_nights) are readable directly.
   useEffect(()=>{
     if(!bookModal) return undefined;
     const rm = roomById(selRoom);
     const {checkIn,checkOut} = bookForm;
-    if(!rm || validateStay(checkIn,checkOut,todaySD())){ setModalAvail({key:"",status:"idle"}); return undefined; }
+    if(!rm || validateStay(checkIn,checkOut,todaySD(),minNights)){ setModalAvail({key:"",status:"idle"}); return undefined; }
     const key = `${rm.id}|${checkIn}|${checkOut}`;
     if(isRoomClosed(rm)){ setModalAvail({key,status:"unavailable"}); return undefined; }
     let cancelled = false;
     setModalAvail({key,status:"checking"});
     const timer = setTimeout(async()=>{
+      const grid = ensureNights(checkIn,checkOut).catch(()=>null);
       try{
         const res = await fetch(`/api/check-availability?check_in=${encodeURIComponent(checkIn)}&check_out=${encodeURIComponent(checkOut)}`);
         if(!res.ok) throw new Error("http "+res.status);
         const j = await res.json();
+        const rows = await grid;
         if(cancelled) return;
         const booked = (j.bookedRooms||[]).map(Number);
-        setModalAvail({key,status: booked.includes(Number(rm.id)) ? "unavailable" : "available"});
-      }catch{ if(!cancelled) setModalAvail({key,status:"error"}); }
+        setModalAvail({key,status: booked.includes(Number(rm.id)) || nightsClosed(rm,checkIn,checkOut,rows) ? "unavailable" : "available"});
+      }catch{
+        const rows = await grid;
+        if(!cancelled) setModalAvail({key,status: nightsClosed(rm,checkIn,checkOut,rows) ? "unavailable" : "error"});
+      }
     },250);
     return ()=>{ cancelled=true; clearTimeout(timer); };
-  },[bookModal,selRoom,bookForm.checkIn,bookForm.checkOut,roomAvail,rooms]);
+  },[bookModal,selRoom,bookForm.checkIn,bookForm.checkOut,rooms,minNights]);
 
   useEffect(()=>{
     if(modalAvail.status==="available"||modalAvail.status==="error") setDetailsOpen(true);
@@ -1249,8 +1238,8 @@ export default function App({initialLang, initialPage} = {}) {
 
   function validateBooking(rm){
     const f = bookForm, e = {};
-    const stay = validateStay(f.checkIn, f.checkOut, todaySD());
-    if(stay) e[stay.field] = stayErrorText(stay.code, lang);
+    const stay = validateStay(f.checkIn, f.checkOut, todaySD(), minNights);
+    if(stay) e[stay.field] = stayErrorText(stay.code, lang, stay.min);
     const cap = Math.max(1, Number(rm?.guests)||2);
     if(!(Number(f.guests)>=1 && Number(f.guests)<=cap)) e.guests = t(`Esta habitación admite hasta ${cap} huéspedes.`,`This room takes up to ${cap} guests.`);
     const name = f.name.trim();
@@ -1283,7 +1272,14 @@ export default function App({initialLang, initialPage} = {}) {
     if(modalAvail.status==="unavailable"){ showBookError(bookingErrorMessage({code:"P0001",message:"C35_UNAVAILABLE"},lang)); return; }
     setSubmitting(true);
     const f = bookForm;
-    const pricing = quoteRoom(rm, f.checkIn, f.checkOut);
+    const grid = await ensureNights(f.checkIn, f.checkOut).catch(()=>null);
+    if(grid && nightsClosed(rm, f.checkIn, f.checkOut, grid)){
+      setSubmitting(false);
+      setModalAvail({key:`${rm.id}|${f.checkIn}|${f.checkOut}`,status:"unavailable"});
+      showBookError(bookingErrorMessage({code:"P0001",message:"C35_UNAVAILABLE"},lang));
+      return;
+    }
+    const pricing = quoteRoom(rm, f.checkIn, f.checkOut, grid || nightMap);
     const email = f.email.trim().toLowerCase();
     const bookingData = {
       guest:f.name.trim(), email, phone:f.phone.trim(),
@@ -1318,41 +1314,94 @@ export default function App({initialLang, initialPage} = {}) {
     setBookError(""); setFieldErrors({}); setDetailsOpen(false);
     setShowConfirmation({booking:{id:ins.id,name:bookingData.guest,email,phone:bookingData.phone,checkIn:f.checkIn,checkOut:f.checkOut,guests:bookingData.guests,total:pricing.total,nights:pricing.nights}, room:rm});
   }
-  // ─── Admin booking save with conflict check ─────────────────────────
+  // ─── Admin booking create/edit ─────────────────────────────────────
+  const quoteDraft = (d, grid = nightMap) => quoteRoom(rooms.find(r=>String(r.id)===String(d.room)), d.checkIn, d.checkOut, grid);
+  const adminSaveError = (error) => isOverlapError(error) ? t(ADMIN_OVERLAP_TEXT[0],ADMIN_OVERLAP_TEXT[1])
+    : String(error?.code||"")==="23514" ? "Revisa los datos: nombre (máx. 120 letras), email, teléfono (máx. 40), notas (máx. 2000) y un total de 0 o más."
+    : "Error al guardar: "+(error?.message||"inténtalo de nuevo");
+
+  // Warnings the owner may override — e.g. he is recording the very Airbnb booking whose imported
+  // block sits on those nights. An overlapping booking is a hard stop (the DB refuses it too).
+  async function stayWarnings(b){
+    const grid = await ensureNights(b.checkIn,b.checkOut).catch(()=>null);
+    const closedN = blockedNights(grid||nightMap, b.room, b.checkIn, b.checkOut);
+    const own = CHANNEL_OF_SOURCE[b.source];
+    const ota = channelNights(channelBlocks, b.room, b.checkIn, b.checkOut).filter(x=>!own||x.source!==own);
+    const lines = [];
+    if(ota.length) lines.push(`• ${ota.length} noche(s) ya ocupada(s) por Airbnb/Booking.com (desde ${ota[0].date}).`);
+    if(closedN.length) lines.push(`• ${closedN.length} noche(s) cerrada(s) en el calendario de precios (desde ${closedN[0]}).`);
+    const n = nightsBetween(b.checkIn,b.checkOut);
+    if(n>MAX_NIGHTS) lines.push(`• Son ${n} noches — revisa que las fechas estén bien.`);
+    return {grid, ok: !lines.length || window.confirm(`Atención:\n${lines.join("\n")}\n\n¿Guardar la reserva de todas formas?`)};
+  }
+
+  async function sendConfirmedEmail(bk){
+    if(!bk?.email) return "noemail";
+    try{
+      const res = await fetch('/api/send-email',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),
+        body:JSON.stringify({type:'booking_confirmed',bookingId:bk.id})});
+      return res.ok ? "sent" : "failed";
+    }catch{ return "failed"; }
+  }
+  const confirmToast = (r) => r==="sent" ? "Confirmada ✓ · correo enviado al huésped" : r==="noemail" ? "Confirmada ✓ (sin email: avísale por WhatsApp)" : "Confirmada ✓ · ⚠️ no se pudo enviar el correo";
+
   async function saveBooking(b) {
-    if(b.checkIn&&b.checkOut&&b.status!=="cancelled") {
-      if(hasConflict(bookings,b.room,b.checkIn,b.checkOut,b.id)||channelConflict(channelBlocks,b.room,b.checkIn,b.checkOut)){
-        setEditBError(t("Conflicto de fechas: esa habitación ya tiene una reserva en ese período (incluye Airbnb/Booking).","Date conflict: that room already has a booking in that period (incl. Airbnb/Booking)."));
-        return;
-      }
+    if(saving) return;
+    const original = bookings.find(x=>x.id===b.id);
+    if(!String(b.guest||"").trim()){ setEditBError("Nombre requerido."); return; }
+    const stay = validateAdminStay(b.checkIn, b.checkOut);
+    if(stay){ setEditBError(stayErrorText(stay.code,"es")); return; }
+    const active = b.status!=="cancelled";
+    const stayChanged = !original || String(original.room)!==String(b.room) || original.checkIn!==b.checkIn || original.checkOut!==b.checkOut;
+    const reactivated = original?.status==="cancelled" && active;
+    let grid = null;
+    if(active && (stayChanged||reactivated)){
+      if(hasBookingConflict(bookings,b.room,b.checkIn,b.checkOut,b.id)){ setEditBError(t(ADMIN_OVERLAP_TEXT[0],ADMIN_OVERLAP_TEXT[1])); return; }
+      const w = await stayWarnings(b);
+      if(!w.ok) return;
+      grid = w.grid;
     }
-    const rm = rooms.find(r=>r.id===b.room);
-    const n = b.checkIn&&b.checkOut?nights(b.checkIn,b.checkOut):1;
-    const pricing = calcPrice(rm?.price||0, b.checkIn||TODAY, b.checkOut||TODAY, null, seasons, rm?.id);
-    const updated = {...b, total:pricing.total, subtotal:pricing.subtotal, tax:pricing.tax};
+    if(stayChanged && !grid) grid = await ensureNights(b.checkIn,b.checkOut).catch(()=>null);
+    // Nights always follow the dates; the total only re-prices when room/dates changed.
+    const {nights:n, total} = bookingTotals(original, b, d=>quoteDraft(d, grid||nightMap));
+    if(!Number.isFinite(total) || total<0){ setEditBError("Revisa el total: escribe un monto válido (ej. 303 o 303.50)."); return; }
+    const row = {guest:String(b.guest).trim(),email:String(b.email||"").trim(),phone:String(b.phone||"").trim(),room:Number(b.room),check_in:b.checkIn,check_out:b.checkOut,nights:n,guests:b.guests,status:b.status,total,paid:!!b.paid,source:b.source,notes:String(b.notes||"")};
+    setSaving(true);
     // Persist FIRST, then update the UI — otherwise a silent failure "saves" locally and reverts on refresh.
-    const {error} = await supabase.from("bookings").update({guest:updated.guest,email:updated.email,phone:updated.phone,room:updated.room,check_in:updated.checkIn,check_out:updated.checkOut,guests:updated.guests,status:updated.status,total:updated.total,paid:updated.paid,source:updated.source,notes:updated.notes}).eq("id",updated.id);
-    if(error){ setEditBError("Error al guardar: "+error.message); return; }
-    setBookings(bookings.map(x=>x.id===b.id?updated:x));
+    const {error} = await supabase.from("bookings").update(row).eq("id",b.id);
+    setSaving(false);
+    if(error){ setEditBError(adminSaveError(error)); return; }
+    const updated = {...original, guest:row.guest, email:row.email, phone:row.phone, room:row.room, checkIn:b.checkIn, checkOut:b.checkOut, nights:n, guests:b.guests, status:b.status, total, paid:row.paid, source:b.source, notes:row.notes};
+    setBookings(prev=>prev.map(x=>x.id===b.id?updated:x));
     setEditBooking(null);setDetailB(null);setEditBError("");
-    showToast("Reserva guardada ✓");
+    if(original?.status==="pending" && b.status==="confirmed") showToast(confirmToast(await sendConfirmedEmail(updated)));
+    else showToast("Reserva guardada ✓");
   }
 
   async function addBookingAdmin() {
-    if(!newB.guest.trim()){setNewBError("Nombre requerido.");return;}
-    if(!newB.checkIn||!newB.checkOut){setNewBError("Fechas requeridas.");return;}
-    if(newB.checkIn>=newB.checkOut){setNewBError("La salida debe ser después de la entrada.");return;}
-    if(newB.status!=="cancelled"&&(hasConflict(bookings,newB.room,newB.checkIn,newB.checkOut)||channelConflict(channelBlocks,newB.room,newB.checkIn,newB.checkOut))){
-      setNewBError("Conflicto de fechas: esa habitación ya tiene una reserva en ese período.");return;
+    if(saving) return;
+    const b = newB;
+    if(!b.guest.trim()){setNewBError("Nombre requerido.");return;}
+    const stay = validateAdminStay(b.checkIn, b.checkOut);
+    if(stay){setNewBError(stayErrorText(stay.code,"es"));return;}
+    let grid = null;
+    if(b.status!=="cancelled"){
+      if(hasBookingConflict(bookings,b.room,b.checkIn,b.checkOut)){ setNewBError(t(ADMIN_OVERLAP_TEXT[0],ADMIN_OVERLAP_TEXT[1])); return; }
+      const w = await stayWarnings(b);
+      if(!w.ok) return;
+      grid = w.grid;
     }
-    const rm = rooms.find(r=>r.id===newB.room);
-    const pricing = calcPrice(rm?.price||0,newB.checkIn,newB.checkOut,null,seasons,rm?.id);
-    const bData = {guest:newB.guest,email:newB.email,phone:newB.phone,room:newB.room,check_in:newB.checkIn,check_out:newB.checkOut,nights:pricing.nights,guests:newB.guests,total:pricing.total,status:newB.status,paid:newB.paid||false,source:newB.source,notes:newB.notes};
+    if(!grid) grid = await ensureNights(b.checkIn,b.checkOut).catch(()=>null);
+    const {nights:n, total} = bookingTotals(null, b, d=>quoteDraft(d, grid||nightMap));
+    if(!Number.isFinite(total) || total<0){ setNewBError("Revisa el total: escribe un monto válido (ej. 303 o 303.50)."); return; }
+    const bData = {guest:b.guest.trim(),email:b.email.trim(),phone:b.phone.trim(),room:Number(b.room),check_in:b.checkIn,check_out:b.checkOut,nights:n,guests:b.guests,total,status:b.status,paid:!!b.paid,source:b.source,notes:b.notes.trim()};
+    setSaving(true);
     const {data:ins,error} = await supabase.from("bookings").insert([bData]).select().single();
-    if(error){showToast("Error: "+error.message);return;}
-    setBookings([ins&&ins.id?{...newB,...ins,checkIn:ins.check_in,checkOut:ins.check_out}:{...newB,id:Date.now(),total:pricing.total,subtotal:pricing.subtotal,tax:pricing.tax},...bookings]);
+    setSaving(false);
+    if(error||!ins){ setNewBError(adminSaveError(error||{})); return; }
+    setBookings(prev=>[mapBookingRow(ins),...prev.filter(x=>x.id!==ins.id)]);
     setNewBookModal(false);
-    setNewB({guest:"",email:"",phone:"",room:1,checkIn:"",checkOut:"",guests:1,notes:"",source:"Direct",status:"confirmed"});
+    setNewB(EMPTY_NEW_BOOKING);
     setNewBError("");
     showToast("Reserva creada ✓");
   }
@@ -1360,10 +1409,11 @@ export default function App({initialLang, initialPage} = {}) {
   async function saveRoom(){
     // Persist price, availability AND the editable content (name/beds/size/guests/amenities/description).
     // Before this, only price+available were saved, so size/beds/etc. reverted on refresh (dad's bug).
+    const available = editRoomD.available!==false;
     const {error} = await supabase.from('rooms').upsert({
       id: String(editRoomD.id),
       price_override: editRoomD.price,
-      available: editRoomD.available,
+      available,
       name: editRoomD.name,
       name_en: editRoomD.nameEn,
       beds: editRoomD.beds,
@@ -1374,9 +1424,8 @@ export default function App({initialLang, initialPage} = {}) {
       photos: Array.isArray(editRoomD.photos) ? editRoomD.photos : null,
     },{onConflict:'id'});
     if(error){ showToast("❌ Error al guardar: "+error.message); return; }
-    const updated = rooms.map(r=>r.id===editRoomD.id?editRoomD:r);
+    const updated = rooms.map(r=>r.id===editRoomD.id?{...editRoomD,available}:r);
     setRooms(updated);
-    setRoomAvail(prev=>({...prev,[editRoomD.id]:editRoomD.available}));
     const allPrices = {};
     updated.forEach(r=>{ allPrices[r.id]=r.price; });
     localStorage.setItem('c35_prices', JSON.stringify(allPrices));
@@ -1461,28 +1510,20 @@ export default function App({initialLang, initialPage} = {}) {
     setPhotoBusy(false);
   }
 
-  async function fetchRoomAvailability() {
-    const {data} = await supabase.from('rooms').select('id,available');
-    if(data){ const m={}; data.forEach(r=>{m[r.id]=r.available;}); setRoomAvail(m); }
-  }
   async function toggleRoomAvail(id) {
-    const newVal = roomAvail[id] === false ? true : false; // default is available
-    const {error} = await supabase.from('rooms').upsert({id,available:newVal},{onConflict:'id'});
+    const newVal = rooms.find(r=>r.id===id)?.available===false;   // closed → open, open → closed
+    const {error} = await supabase.from('rooms').upsert({id:String(id),available:newVal},{onConflict:'id'});
     if(error){ showToast("❌ Error: "+error.message); return; }
-    setRoomAvail(prev=>({...prev,[id]:newVal}));
+    setRooms(prev=>prev.map(r=>r.id===id?{...r,available:newVal}:r));
     showToast(newVal ? "Habitación habilitada ✓" : "Habitación marcada como cerrada");
   }
   async function updateBookingStatus(id, status) {
     const {error} = await supabase.from('bookings').update({status}).eq('id',id);
-    if(error){ showToast("❌ Error al guardar: "+error.message); return; }
+    if(error){ showToast("❌ "+(isOverlapError(error)?ADMIN_OVERLAP_TEXT[0]:"Error al guardar: "+error.message)); return false; }
     setBookings(prev=>prev.map(x=>x.id===id?{...x,status}:x));
-    showToast(status==="confirmed"?"Confirmada ✓":"Cancelada");
-    if(status==="confirmed"){
-      const bk=bookings.find(b=>b.id===id);
-      const rm=rooms.find(r=>r.id===bk?.room);
-      if(bk&&rm) fetch('/api/send-email',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({type:'booking_confirmed',booking:bk,room:rm})}).catch(()=>{});
-    }
+    if(status==="confirmed") showToast(confirmToast(await sendConfirmedEmail(bookings.find(b=>b.id===id))));
+    else showToast(status==="cancelled"?"Reserva cancelada":"Estado actualizado ✓");
+    return true;
   }
   async function markPaid(id) {
     const {error} = await supabase.from('bookings').update({paid:true}).eq('id',id);
@@ -1498,23 +1539,23 @@ export default function App({initialLang, initialPage} = {}) {
     showToast("Check-in registrado ✓");
   }
   async function checkOutGuest(bookingId) {
-    const bk = bookings.find(b=>b.id===bookingId);
     const {error} = await supabase.from('bookings').update({status:"finalizada"}).eq('id',bookingId);
     if(error){ showToast("❌ Error al guardar check-out: "+error.message); return; }
     setBookings(prev=>prev.map(b=>b.id===bookingId?{...b,status:"finalizada"}:b));
     setDetailB(prev=>prev?{...prev,status:"finalizada"}:null);
+    // The room's open/closed flag is the owner's call (maintenance etc.) — a check-out never changes it.
     showToast("Check-out registrado ✓ Estancia finalizada");
-    if(bk?.room){
-      setRoomAvail(prev=>({...prev,[bk.room]:true}));
-      await supabase.from('rooms').upsert({id:bk.room,available:true},{onConflict:'id'});
-    }
   }
+  // Only reachable from the "cancel or delete?" dialog, which names the guest and dates.
   async function deleteBooking(id) {
     const {error} = await supabase.from('bookings').delete().eq('id',id);
     if(error){ showToast("Error al eliminar: "+error.message); return; }
     setBookings(prev=>prev.filter(b=>b.id!==id));
-    setEditBooking(null); setDetailB(null);
+    setBookingAction(null); setEditBooking(null); setDetailB(null);
     showToast("Reserva eliminada");
+  }
+  async function cancelBooking(id) {
+    if(await updateBookingStatus(id,"cancelled")){ setBookingAction(null); setEditBooking(null); setDetailB(null); }
   }
 
   // ─── Message actions ──────────────────────────────────────────────
@@ -1529,17 +1570,34 @@ export default function App({initialLang, initialPage} = {}) {
     setMessages(prev=>prev.filter(m=>m.id!==id));
     showToast("Mensaje eliminado");
   }
+  async function addMessage(){
+    const guest = newMsg.guest.trim(), body = newMsg.message.trim();
+    if(!guest||!body){ showToast("Escribe el nombre y el mensaje"); return; }
+    setSaving(true);
+    const {data,error} = await supabase.from("messages").insert([{guest,email:newMsg.email.trim()||null,phone:newMsg.phone.trim()||null,body,read:true}]).select().single();
+    setSaving(false);
+    if(error||!data){ showToast("❌ No se pudo guardar el mensaje: "+(error?.message||"")); return; }
+    setMessages(prev=>[{id:data.id,guest:data.guest,email:data.email||"",phone:data.phone||"",message:data.body||"",date:(data.created_at||"").slice(0,10)||TODAY,read:!!data.read},...prev.filter(m=>m.id!==data.id)]);
+    setAddMsgModal(false);
+    setNewMsg({guest:"",email:"",phone:"",message:""});
+    showToast("Mensaje guardado ✓");
+  }
 
   // ─── Availability checker ────────────────────────────────────────
 
   async function checkAvailability() {
-    if(validateStay(availDates.checkIn,availDates.checkOut,todaySD())) return;
+    const {checkIn,checkOut} = availDates;
+    if(validateStay(checkIn,checkOut,todaySD(),minNights)) return;
     setAvailLoading(true); setAvailError("");
+    const grid = ensureNights(checkIn,checkOut).catch(()=>null);
     try {
-      const res = await fetch(`/api/check-availability?check_in=${encodeURIComponent(availDates.checkIn)}&check_out=${encodeURIComponent(availDates.checkOut)}`);
+      const res = await fetch(`/api/check-availability?check_in=${encodeURIComponent(checkIn)}&check_out=${encodeURIComponent(checkOut)}`);
       if(!res.ok) throw new Error("http "+res.status);
       const data = await res.json();
-      setBookedRoomIds((data.bookedRooms||[]).map(Number));
+      const rows = await grid;
+      const booked = new Set((data.bookedRooms||[]).map(Number));
+      rooms.forEach(r=>{ if(nightsClosed(r,checkIn,checkOut,rows)) booked.add(Number(r.id)); });
+      setBookedRoomIds([...booked]);
     } catch(e) {
       setBookedRoomIds(null);
       setAvailError(t("No pudimos verificar la disponibilidad. Intenta de nuevo o escríbenos por WhatsApp.","We couldn’t check availability. Please try again or message us on WhatsApp."));
@@ -1553,6 +1611,22 @@ export default function App({initialLang, initialPage} = {}) {
       return next;
     });
     setBookedRoomIds(null); setAvailError("");
+  }
+
+  async function saveSettings(){
+    // wa.me links need digits only; stored that way, shown formatted.
+    const whatsapp = waDigits(settDraft.whatsapp);
+    if(!isWaNumber(whatsapp)){ setSettErr("Revisa el WhatsApp: escribe el número completo con código de país (ej. +1 809 603 3038)."); return; }
+    const taxRate = settDraft.taxRate===""||settDraft.taxRate==null ? 0 : Number(settDraft.taxRate);
+    if(!Number.isFinite(taxRate)||taxRate<0){ setSettErr("Revisa el impuesto (%)."); return; }
+    const minN = clampMinNights(settDraft.minNights);
+    const next = {...settDraft, whatsapp, taxRate, minNights:minN};
+    setSaving(true);
+    const {error} = await supabase.from("settings").update({hotel_name:next.propName,address:next.address,phone:next.phone,whatsapp,email:next.email,instagram:next.instagram,hero_subtitle:next.heroSubtitle,check_in_time:next.checkIn,check_out_time:next.checkOut,min_nights:minN,tax_rate:taxRate}).eq("id",1);
+    setSaving(false);
+    if(error){ setSettErr("Error al guardar: "+error.message); return; }
+    setSettings(next); setEditSettings(false); setSettErr("");
+    showToast("Configuración guardada ✓");
   }
 
   // ─── Expense CRUD ────────────────────────────────────────────────
@@ -1667,18 +1741,72 @@ export default function App({initialLang, initialPage} = {}) {
     const totalCells = Math.ceil((fd+dim)/7)*7;
     const calTitle = (lang==="es"?MONTH_NAMES_ES:MONTH_NAMES_EN)[calMonth]+" "+calYear;
 
-    const adminTabs=[
-      ["dashboard","📊 Dashboard"],
-      ["bookings",`📋 Reservas${pendingCnt>0?` (${pendingCnt})`:""}`],
-      ["calendar","📅 Calendario"],
-      ["precios","💲 Precios"],
-      ["rooms","🏠 Habitaciones"],
-      ["messages",`💬 Mensajes${unreadCnt>0?` (${unreadCnt})`:""}`],
-      ["finances","💰 Finanzas"],
-      ["reviews","⭐ Reseñas"],
-      ["analytics","📈 Analíticas"],
-      ["settings","⚙️ Config"],
+    const adminTabs=[   // [id, icon, label, badge]
+      ["dashboard","📊","Dashboard",0],
+      ["bookings","📋","Reservas",pendingCnt],
+      ["calendar","📅","Calendario",0],
+      ["precios","💲","Precios",0],
+      ["rooms","🏠","Habitaciones",0],
+      ["messages","💬","Mensajes",unreadCnt],
+      ["finances","💰","Finanzas",0],
+      ["reviews","⭐","Reseñas",0],
+      ["analytics","📈","Analíticas",0],
+      ["settings","⚙️","Config",0],
     ];
+    const tabLabel = ([,ic,lbl,n]) => `${ic} ${lbl}${n>0?` (${n})`:""}`;
+
+    // Shared by "Nueva Reserva" and "Editar Reserva" (plain render helpers, not components,
+    // so inputs keep focus while typing).
+    const setStay = (d, setD, k, v) => {
+      const next = {...d,[k]:v};
+      if(k==="checkIn" && isYmd(v) && (!isYmd(d.checkOut) || d.checkOut<=v)) next.checkOut = addDays(v,1);
+      setD(next);
+    };
+    const bookingFields = (d, setD, idp, statusOpts) => {
+      const sources = !d.source || BOOKING_SOURCES.includes(d.source) ? BOOKING_SOURCES : [...BOOKING_SOURCES, d.source];
+      const maxG = Math.max(4, Number(d.guests)||1);
+      return(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1rem",marginBottom:"1rem"}} className="mob-full">
+          <div style={{gridColumn:"1/-1"}}><FL htmlFor={`${idp}-guest`}>Nombre del Huésped *</FL><Inp id={`${idp}-guest`} maxLength={120} value={d.guest||""} onChange={e=>setD({...d,guest:e.target.value})}/></div>
+          <div><FL htmlFor={`${idp}-email`}>Email</FL><Inp id={`${idp}-email`} type="email" maxLength={254} value={d.email||""} onChange={e=>setD({...d,email:e.target.value})}/></div>
+          <div><FL htmlFor={`${idp}-phone`}>Teléfono / WhatsApp</FL><Inp id={`${idp}-phone`} type="tel" maxLength={40} value={d.phone||""} onChange={e=>setD({...d,phone:e.target.value})}/></div>
+          <div><FL htmlFor={`${idp}-room`}>Habitación *</FL><Sel id={`${idp}-room`} value={d.room} onChange={e=>setD({...d,room:parseInt(e.target.value,10)})}>{rooms.map(r=><option key={r.id} value={r.id}>{r.name} · ${quoteRoom(r).rate}/noche{r.available===false?" (cerrada)":""}</option>)}</Sel></div>
+          <div><FL htmlFor={`${idp}-source`}>Fuente</FL><Sel id={`${idp}-source`} value={d.source||"Direct"} onChange={e=>setD({...d,source:e.target.value})}>{sources.map(x=><option key={x} value={x}>{x}</option>)}</Sel></div>
+          <div><FL htmlFor={`${idp}-in`}>Check-in *</FL><Inp id={`${idp}-in`} type="date" value={d.checkIn||""} onChange={e=>setStay(d,setD,"checkIn",e.target.value)}/></div>
+          <div><FL htmlFor={`${idp}-out`}>Check-out *</FL><Inp id={`${idp}-out`} type="date" min={isYmd(d.checkIn)?addDays(d.checkIn,1):undefined} value={d.checkOut||""} onChange={e=>setStay(d,setD,"checkOut",e.target.value)}/></div>
+          <div><FL htmlFor={`${idp}-guests`}>Huéspedes</FL><Sel id={`${idp}-guests`} value={d.guests} onChange={e=>setD({...d,guests:parseInt(e.target.value,10)})}>{Array.from({length:maxG},(_,i)=>i+1).map(n=><option key={n} value={n}>{n}</option>)}</Sel></div>
+          <div><FL htmlFor={`${idp}-status`}>Estado</FL><Sel id={`${idp}-status`} value={d.status} onChange={e=>setD({...d,status:e.target.value})}>{statusOpts.map(([v,l])=><option key={v} value={v}>{l}</option>)}</Sel></div>
+          <div style={{gridColumn:"1/-1"}}><FL htmlFor={`${idp}-notes`}>Notas</FL><Inp id={`${idp}-notes`} maxLength={2000} value={d.notes||""} onChange={e=>setD({...d,notes:e.target.value})}/></div>
+        </div>
+      );
+    };
+    // Calculated price + the Total that will be saved. Editing only contact details keeps the
+    // saved total; a typed total (e.g. the exact Airbnb payout) always wins.
+    const totalBox = (original, d, setD, idp) => {
+      const q = quoteDraft(d);
+      const res = bookingTotals(original, d, ()=>q);
+      const n = isYmd(d.checkIn)&&isYmd(d.checkOut) ? nightsBetween(d.checkIn,d.checkOut) : 0;
+      const shown = d.totalTouched ? d.total : (Number.isFinite(res.total) ? String(res.total) : "");
+      return(
+        <div className="price-breakdown" data-testid={`${idp}-price`}>
+          {q.valid
+            ? <div className="price-row"><span style={{color:C.taupe}}>{q.seasonal?`${q.nights} noche${q.nights!==1?"s":""} · tarifa calculada (con precios especiales)`:`$${q.rate} × ${q.nights} noche${q.nights!==1?"s":""} · tarifa calculada`}</span><span>{fmtMoney(q.total)}</span></div>
+            : <div className="price-row"><span style={{color:C.taupe}}>{n<1&&isYmd(d.checkIn)&&isYmd(d.checkOut)?"La salida debe ser después de la entrada.":"Elige las fechas para calcular el precio."}</span></div>}
+          <div style={{display:"flex",alignItems:"flex-end",gap:".75rem",marginTop:".6rem",flexWrap:"wrap"}}>
+            <div style={{flex:"1 1 160px"}}>
+              <FL htmlFor={`${idp}-total`}>Total a guardar ($)</FL>
+              <Inp id={`${idp}-total`} inputMode="decimal" value={shown} onChange={e=>setD({...d,total:e.target.value,totalTouched:true})} placeholder="0.00"/>
+            </div>
+            {n>0&&<div style={{fontFamily:"'Lato',sans-serif",fontSize:".8rem",color:C.ebony,paddingBottom:".7rem"}} data-testid={`${idp}-nights`}>{n} noche{n!==1?"s":""}</div>}
+          </div>
+          {d.totalTouched&&q.valid&&<button type="button" onClick={()=>setD({...d,total:"",totalTouched:false})} style={{background:"none",border:"none",color:C.goldText,textDecoration:"underline",cursor:"pointer",padding:".4rem 0 0",fontFamily:"'Lato',sans-serif",fontSize:".74rem"}}>↺ Usar el precio calculado ({fmtMoney(q.total)})</button>}
+          <div style={{fontFamily:"'Lato',sans-serif",fontSize:".7rem",color:C.taupe,marginTop:".35rem",lineHeight:1.5}}>
+            {original&&!res.stayChanged&&!d.totalTouched?"Se mantiene el total guardado; solo se recalcula si cambias la habitación o las fechas. ":""}
+            Para Airbnb/Booking escribe el pago exacto que recibes.
+          </div>
+        </div>
+      );
+    };
 
     return(
       <div style={{fontFamily:"'Cormorant Garamond',serif",display:"flex",minHeight:"100vh",background:C.smoke}}>
@@ -1692,30 +1820,40 @@ export default function App({initialLang, initialPage} = {}) {
             <div style={{color:C.taupe,fontSize:".55rem",fontFamily:"'Lato',sans-serif",letterSpacing:".2em",marginTop:".18rem"}}>GESTIÓN</div>
           </div>
           <div style={{flex:1,paddingTop:".4rem"}}>
-            {adminTabs.map(([id,lbl])=>(
-              <div key={id} className={`sb${adminTab===id?" act":""}`} onClick={()=>setAdminTab(id)}>{lbl}</div>
+            {adminTabs.map(tab=>(
+              <div key={tab[0]} className={`sb${adminTab===tab[0]?" act":""}`} onClick={()=>setAdminTab(tab[0])}>{tabLabel(tab)}</div>
             ))}
           </div>
           <div style={{borderTop:`1px solid ${C.mahogany}50`,paddingBottom:".5rem"}}>
             <div className="sb" onClick={printReport}>🖨️ Imprimir Reporte</div>
-            <div className="sb" onClick={async()=>{await supabase.auth.signOut();setAdminAuth(false);sessionStorage.setItem('c35_view','public');setView("public");}}>🌐 Ver Sitio Público</div>
+            <div className="sb" onClick={viewPublicSite}>🌐 Ver Sitio Público</div>
             <div className="sb" onClick={adminLogout}>🚪 Cerrar Sesión</div>
           </div>
         </div>
 
-        {/* Mobile tab bar */}
-        <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.ebony,zIndex:100,overflowX:"auto",borderTop:`1px solid ${C.mahogany}50`}} className="mob-tabbar">
-          <div style={{display:"flex",minWidth:"max-content"}}>
-            {adminTabs.slice(0,6).map(([id,lbl])=>(
-              <button key={id} onClick={()=>setAdminTab(id)} style={{background:"none",border:"none",color:adminTab===id?C.gold:C.taupe,padding:".6rem .9rem",fontFamily:"'Lato',sans-serif",fontSize:".6rem",cursor:"pointer",whiteSpace:"nowrap"}}>{lbl}</button>
+        {/* Mobile tab bar — every tab, scrolls sideways */}
+        <nav aria-label="Secciones" style={{position:"fixed",bottom:0,left:0,right:0,background:C.ebony,zIndex:100,borderTop:`1px solid ${C.mahogany}50`,display:"none",paddingBottom:"env(safe-area-inset-bottom)"}} className="mob-tabbar">
+          <div className="mtabs">
+            {adminTabs.map(([id,ic,lbl,n])=>(
+              <button key={id} type="button" className={`mtab${adminTab===id?" act":""}`} aria-current={adminTab===id?"page":undefined} onClick={()=>setAdminTab(id)}>
+                <span className="ic" aria-hidden="true">{ic}</span><span>{lbl}{n>0?` (${n})`:""}</span>
+              </button>
             ))}
+            <span style={{flex:"0 0 22px"}}/>
           </div>
-        </div>
+          <span className="mtab-fade" aria-hidden="true"/>
+        </nav>
 
         {/* Main content */}
-        <div style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column"}}>
-          <div style={{background:C.white,padding:"1rem 1.75rem",borderBottom:`1px solid ${C.parchment}`,display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:50,flexWrap:"wrap",gap:".5rem"}}>
-            <h1 style={{margin:0,fontSize:"1.2rem",fontWeight:400,color:C.ebony}}>{adminTabs.find(x=>x[0]===adminTab)?.[1]}</h1>
+        <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column"}}>
+          <div className="adm-head mob-p" style={{background:C.white,padding:"1rem 1.75rem",borderBottom:`1px solid ${C.parchment}`,display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:50,flexWrap:"wrap",gap:".5rem"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:".5rem",flex:"1 1 auto",minWidth:0}}>
+              <h1 style={{margin:0,fontSize:"1.2rem",fontWeight:400,color:C.ebony,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{tabLabel(adminTabs.find(x=>x[0]===adminTab)||adminTabs[0])}</h1>
+              <div className="mob-only" style={{gap:".4rem",flexShrink:0}}>
+                <button type="button" className="adm-hbtn" onClick={viewPublicSite} aria-label="Ver sitio público">🌐 Sitio</button>
+                <button type="button" className="adm-hbtn" onClick={adminLogout}>🚪 Salir</button>
+              </div>
+            </div>
             <div style={{display:"flex",gap:".5rem",alignItems:"center",flexWrap:"wrap"}}>
               {pendingCnt>0&&<span style={{background:C.gold,color:C.ebony,borderRadius:20,padding:".15rem .7rem",fontSize:".67rem",fontFamily:"'Lato',sans-serif",fontWeight:700}}>{pendingCnt} pendiente{pendingCnt>1?"s":""}</span>}
               {unreadCnt>0&&<span style={{background:"#1565C0",color:"#fff",borderRadius:20,padding:".15rem .7rem",fontSize:".67rem",fontFamily:"'Lato',sans-serif",fontWeight:700}}>{unreadCnt} nuevo{unreadCnt>1?"s":""}</span>}
@@ -1836,7 +1974,7 @@ export default function App({initialLang, initialPage} = {}) {
                           <div style={{display:"flex",gap:".25rem",flexWrap:"wrap"}}>
                             <button className="btn-sm-o" style={{fontSize:".58rem",padding:".2rem .5rem"}} onClick={()=>{setEditBooking({...b});setEditBError("");}}>✏️</button>
                             {b.status==="pending"&&<><button className="btn-success" style={{fontSize:".58rem",padding:".2rem .45rem"}} onClick={()=>updateBookingStatus(b.id,"confirmed")}>✓</button><button className="btn-danger" style={{fontSize:".58rem",padding:".2rem .45rem"}} onClick={()=>updateBookingStatus(b.id,"cancelled")}>✗</button></>}
-                            <a href={`https://wa.me/${(b.phone||"").replace(/\D/g,"")}`} style={{textDecoration:"none"}}><button className="btn-sm-o" style={{fontSize:".58rem",padding:".2rem .45rem"}}>WA</button></a>
+                            {waLinkFor(b.phone)&&<a href={waLinkFor(b.phone)} target="_blank" rel="noopener noreferrer" className="btn-sm-o" style={{fontSize:".58rem",padding:".2rem .45rem",textDecoration:"none"}}>WA</a>}
                           </div>
                         </td>
                       </tr>
@@ -1925,10 +2063,11 @@ export default function App({initialLang, initialPage} = {}) {
 
             {calView==="mes"&&(<>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem",flexWrap:"wrap",gap:".75rem"}}>
-              <div style={{display:"flex",alignItems:"center",gap:"1rem"}}>
-                <button className="btn-sm-o" style={{padding:".42rem .85rem"}} onClick={calNavPrev}>←</button>
-                <h2 style={{fontSize:"1.15rem",fontWeight:400,color:C.ebony,minWidth:200,textAlign:"center"}}>{calTitle}</h2>
-                <button className="btn-sm-o" style={{padding:".42rem .85rem"}} onClick={calNavNext}>→</button>
+              <div style={{display:"flex",alignItems:"center",gap:".6rem",flexWrap:"wrap"}}>
+                <button className="btn-sm-o" style={{padding:".42rem .85rem"}} onClick={calNavPrev} aria-label="Mes anterior">←</button>
+                <h2 style={{fontSize:"1.15rem",fontWeight:400,color:C.ebony,minWidth:150,textAlign:"center"}}>{calTitle}</h2>
+                <button className="btn-sm-o" style={{padding:".42rem .85rem"}} onClick={calNavNext} aria-label="Mes siguiente">→</button>
+                <button className="btn-sm-o" style={{padding:".42rem .85rem"}} onClick={()=>{setCalYear(Number(TODAY.slice(0,4)));setCalMonth(Number(TODAY.slice(5,7))-1);}}>Hoy</button>
               </div>
               <div style={{display:"flex",gap:".75rem",alignItems:"center",flexWrap:"wrap"}}>
                 <div style={{display:"flex",gap:".65rem",fontFamily:"'Lato',sans-serif",fontSize:".68rem",color:C.taupe,alignItems:"center"}}>
@@ -1965,7 +2104,7 @@ export default function App({initialLang, initialPage} = {}) {
                       onClick={()=>{
                         const dayBs=bookings.filter(b=>b.checkIn<=dateStr&&b.checkOut>dateStr&&b.status!=="cancelled");
                         if(dayBs.length===1){setDetailB(dayBs[0]);}
-                        else{setNewB(prev=>({...prev,checkIn:dateStr,checkOut:dateStr}));setNewBookModal(true);setNewBError("");}
+                        else{setNewB({...EMPTY_NEW_BOOKING,checkIn:dateStr,checkOut:addDays(dateStr,1)});setNewBookModal(true);setNewBError("");}
                       }}>
                       <div style={{textAlign:"center",fontSize:".7rem",fontFamily:"'Lato',sans-serif",color:isToday?C.ebony:dbs.length>0?C.success:C.taupe,fontWeight:isToday||dbs.length>0?700:400,marginBottom:2}}>{dayNum}</div>
                       {dbs.slice(0,2).map(b=>(
@@ -2057,7 +2196,7 @@ export default function App({initialLang, initialPage} = {}) {
                   <div style={{display:"flex",justifyContent:"space-between",marginBottom:".65rem",flexWrap:"wrap",gap:".5rem"}}>
                     <div style={{display:"flex",gap:".7rem",alignItems:"center",flexWrap:"wrap"}}>
                       <span style={{fontFamily:"'Lato',sans-serif",fontWeight:700,color:C.ebony}}>{m.guest}</span>
-                      <span style={{fontFamily:"'Lato',sans-serif",fontSize:".74rem",color:C.taupe}}>{m.email}</span>
+                      <span style={{fontFamily:"'Lato',sans-serif",fontSize:".74rem",color:C.taupe}}>{[m.email,m.phone].filter(Boolean).join(" · ")}</span>
                       {!m.read&&<span style={{background:C.gold,color:C.ebony,padding:".1rem .5rem",borderRadius:20,fontSize:".62rem",fontFamily:"'Lato',sans-serif",fontWeight:700}}>NUEVO</span>}
                     </div>
                     <span style={{fontFamily:"'Lato',sans-serif",fontSize:".73rem",color:C.taupe}}>{m.date}</span>
@@ -2065,8 +2204,8 @@ export default function App({initialLang, initialPage} = {}) {
                   <p style={{fontStyle:"italic",color:C.ebony,lineHeight:1.7,marginBottom:".9rem"}}>"{m.message}"</p>
                   <div style={{display:"flex",gap:".5rem",flexWrap:"wrap"}}>
                     <button className="btn-sm" onClick={()=>{setReplyModal(m);setReplyTxt("");markMessageRead(m.id);}}>Responder</button>
-                    <a href={`https://wa.me/${(m.phone||settings.whatsapp).replace(/\D/g,"")}`} style={{textDecoration:"none"}}><button className="btn-sm-o">WhatsApp</button></a>
-                    <a href={`mailto:${m.email}`} style={{textDecoration:"none"}}><button className="btn-sm-o">Email</button></a>
+                    {waLinkFor(m.phone)&&<a href={waLinkFor(m.phone)} target="_blank" rel="noopener noreferrer" className="btn-sm-o" style={{textDecoration:"none"}}>WhatsApp</a>}
+                    {m.email&&<a href={`mailto:${m.email}`} className="btn-sm-o" style={{textDecoration:"none"}}>Email</a>}
                     {!m.read&&<button className="btn-sm-o" onClick={()=>markMessageRead(m.id)}>Marcar leído</button>}
                     <button style={{background:"none",border:"none",color:C.danger,cursor:"pointer",fontFamily:"'Lato',sans-serif",fontSize:".7rem"}} onClick={()=>deleteMessage(m.id)}>Eliminar</button>
                   </div>
@@ -2204,29 +2343,29 @@ export default function App({initialLang, initialPage} = {}) {
           {/* ── ANALYTICS ── */}
           {adminTab==="analytics"&&(<div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(148px,1fr))",gap:"1rem",marginBottom:"1.75rem"}}>
-              {[[fmtMoney(totalRev),"Ingresos",C.warm],[fmtMoney(netRevenue),"Ingreso Neto (post-comisión)",netRevenue>=0?C.olive:C.danger],[Math.round((occupiedToday/rooms.length)*100)+"%","Ocup. Hoy",C.olive],[fmtMoney(adr),"ADR · Tarifa Media",C.gold],[fmtMoney(revpar30),"RevPAR (30 días)",C.warm],[bookings.filter(b=>b.source==="Direct").length,"Reservas Directas",C.mahogany],[fmtMoney(otaCommission),"Comisiones OTA",C.danger],[reviews.filter(r=>r.approved).length+"",`Reseñas (${(reviews.reduce((s,r)=>s+r.rating,0)/Math.max(reviews.length,1)).toFixed(1)}⭐)`,C.gold]].map(([v,l,col])=>(
+              {[[fmtMoney(totalRev),"Ingresos",C.warm],[fmtMoney(netRevenue),"Ingreso Neto (post-comisión)",netRevenue>=0?C.olive:C.danger],[Math.round((occupiedToday/rooms.length)*100)+"%","Ocup. Hoy",C.olive],[fmtMoney(adr),"ADR · Tarifa Media",C.gold],[fmtMoney(revpar30),"RevPAR (30 días)",C.warm],[bookings.filter(b=>b.source==="Direct"&&isRev(b)).length,"Reservas Directas",C.mahogany],[fmtMoney(otaCommission),"Comisiones Airbnb/Booking",C.danger],[dbReviews.length+"",dbReviews.length?`Reseñas reales · ${(dbReviews.reduce((s,r)=>s+(Number(r.rating)||0),0)/dbReviews.length).toFixed(1)}⭐`:"Reseñas reales",C.gold]].map(([v,l,col])=>(
                 <div key={l} className="stat" style={{borderTopColor:col}}><div className="stat-v" style={{color:col,fontSize:"1.55rem"}}>{v}</div><div className="stat-l">{l}</div></div>
               ))}
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.5rem"}} className="mob-full">
               <div className="card" style={{padding:"1.5rem"}}>
                 <h3 style={{fontFamily:"'Lato',sans-serif",fontSize:".77rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,marginBottom:"1.4rem"}}>Canales de Reserva</h3>
-                {[["Direct",C.warm],["Airbnb","#FF5A5F"],["Booking.com","#003580"]].map(([src,col])=>{
-                  const cnt=bookings.filter(b=>b.source===src&&isRev(b)).length;
-                  const rev=bookings.filter(b=>b.source===src&&isRev(b)).reduce((s,b)=>s+b.total,0);
-                  const pct=bookings.filter(isRev).length?Math.round((cnt/bookings.filter(isRev).length)*100):0;
-                  return(
-                    <div key={src} style={{marginBottom:"1.1rem"}}>
-                      <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lato',sans-serif",fontSize:".8rem",marginBottom:".28rem"}}>
-                        <span style={{color:C.ebony,fontWeight:600}}>{src}</span>
-                        <span style={{color:C.taupe}}>{cnt} reservas · {pct}% · {fmtMoney(rev)}</span>
+                {(()=>{
+                  const rows = channelBreakdown(bookings);
+                  const COL = {"Direct":C.warm,"Airbnb":"#FF5A5F","Booking.com":"#003580","WhatsApp":"#1B7F46","Teléfono":C.olive};
+                  if(!rows.length) return <p style={{fontFamily:"'Lato',sans-serif",fontSize:".8rem",color:C.taupe}}>Aún no hay reservas con ingresos.</p>;
+                  return rows.map(({source,count,revenue,pct})=>(
+                    <div key={source} style={{marginBottom:"1.1rem"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:".5rem",flexWrap:"wrap",fontFamily:"'Lato',sans-serif",fontSize:".8rem",marginBottom:".28rem"}}>
+                        <span style={{color:C.ebony,fontWeight:600}}>{source==="Direct"?"Directa (web)":source}{isOta({source})?` · ${Math.round(OTA_RATE*1000)/10}% comisión`:""}</span>
+                        <span style={{color:C.taupe}}>{count} reserva{count!==1?"s":""} · {pct}% · {fmtMoney(revenue)}</span>
                       </div>
-                      <div style={{background:C.parchment,height:9}}><div style={{background:col,width:`${pct}%`,height:"100%"}}/></div>
+                      <div style={{background:C.parchment,height:9}}><div style={{background:COL[source]||C.gold,width:`${pct}%`,height:"100%"}}/></div>
                     </div>
-                  );
-                })}
+                  ));
+                })()}
                 <div style={{marginTop:"1.4rem",padding:".9rem 1.1rem",background:C.smoke,borderLeft:`3px solid ${C.gold}`}}>
-                  <p style={{fontFamily:"'Lato',sans-serif",fontSize:".79rem",color:C.warm,lineHeight:1.65}}>Reservas directas ahorran comisiones estimadas de <strong>{fmtMoney(Math.round(bookings.filter(b=>b.source!=="Direct"&&isRev(b)).reduce((s,b)=>s+b.total*.175,0)))}</strong>.</p>
+                  <p style={{fontFamily:"'Lato',sans-serif",fontSize:".79rem",color:C.warm,lineHeight:1.65}}>Las reservas sin Airbnb/Booking (web, WhatsApp, teléfono) te ahorraron unos <strong>{fmtMoney(Math.round(bookings.filter(b=>isRev(b)&&!isOta(b)).reduce((s,b)=>s+(Number(b.total)||0)*OTA_RATE,0)))}</strong> en comisiones.</p>
                 </div>
               </div>
               <div className="card" style={{padding:"1.5rem"}}>
@@ -2245,9 +2384,9 @@ export default function App({initialLang, initialPage} = {}) {
             <div className="card" style={{padding:"1.75rem",marginBottom:"1.5rem"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.4rem"}}>
                 <h3 style={{fontFamily:"'Lato',sans-serif",fontSize:".77rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm}}>Información del Negocio</h3>
-                <button className="btn-sm" onClick={()=>{setSettDraft({...settings});setEditSettings(true);}}>✏️ Editar</button>
+                <button className="btn-sm" onClick={()=>{setSettDraft({...settings,whatsapp:formatWa(settings.whatsapp)});setSettErr("");setEditSettings(true);}}>✏️ Editar</button>
               </div>
-              {[["Nombre",settings.propName],["Dirección",settings.address],["Teléfono",settings.phone],["WhatsApp",settings.whatsapp],["Email",settings.email],["Check-in",settings.checkIn],["Check-out",settings.checkOut],["Instagram",settings.instagram],["Noches mínimas",settings.minNights]].map(([l,v])=>(
+              {[["Nombre",settings.propName],["Dirección",settings.address],["Teléfono",settings.phone],["WhatsApp",formatWa(settings.whatsapp)],["Email",settings.email],["Check-in",settings.checkIn],["Check-out",settings.checkOut],["Instagram",settings.instagram],["Noches mínimas",settings.minNights]].map(([l,v])=>(
                 <div key={l} style={{display:"flex",gap:"1rem",padding:".65rem 0",borderBottom:`1px solid ${C.smoke}`,fontFamily:"'Lato',sans-serif"}}>
                   <span style={{fontSize:".63rem",color:C.taupe,letterSpacing:".1em",textTransform:"uppercase",minWidth:140}}>{l}</span>
                   <span style={{fontSize:".86rem",color:C.ebony,flex:1,whiteSpace:"pre-line"}}>{v}</span>
@@ -2258,7 +2397,8 @@ export default function App({initialLang, initialPage} = {}) {
               <h3 style={{fontFamily:"'Lato',sans-serif",fontSize:".77rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,marginBottom:"1rem"}}>Acciones</h3>
               <div style={{display:"flex",gap:".65rem",flexWrap:"wrap"}}>
                 <button className="btn-sm-o" onClick={printReport}>🖨️ Imprimir Reporte</button>
-                <button className="btn-sm-o" onClick={async()=>{await supabase.auth.signOut();setAdminAuth(false);sessionStorage.setItem('c35_view','public');setView("public");}}>🌐 Ver Sitio Público</button>
+                <button className="btn-sm-o" onClick={viewPublicSite}>🌐 Ver Sitio Público</button>
+                <button className="btn-sm-o" onClick={adminLogout}>🚪 Cerrar Sesión</button>
               </div>
               <div style={{marginTop:"1.5rem",padding:"1rem 1.25rem",background:C.smoke,borderLeft:`3px solid ${C.gold}`}}>
                 <p style={{fontFamily:"'Lato',sans-serif",fontSize:".82rem",color:C.warm,fontWeight:700,marginBottom:".5rem"}}>🟢 Sistema conectado y en vivo</p>
@@ -2285,7 +2425,7 @@ export default function App({initialLang, initialPage} = {}) {
                 <p style={{fontFamily:"'Lato',sans-serif",fontSize:".77rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,marginBottom:"1rem"}}>🛏 Disponibilidad de Habitaciones</p>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:".65rem",marginBottom:".75rem"}}>
                   {rooms.map(r=>{
-                    const avail=roomAvail[r.id]!==false;
+                    const avail=r.available!==false;
                     return(<div key={r.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:".75rem 1rem",background:C.smoke,border:`1px solid ${avail?C.gold+"40":C.danger+"60"}`}}>
                       <span style={{fontFamily:"'Lato',sans-serif",fontSize:".83rem",fontWeight:600}}>{r.name}</span>
                       <button onClick={()=>toggleRoomAvail(r.id)} style={{background:avail?C.gold:C.danger,color:avail?C.ebony:"#fff",border:"none",padding:".3rem .9rem",fontFamily:"'Lato',sans-serif",fontSize:".68rem",fontWeight:700,cursor:"pointer",letterSpacing:".08em"}}>{avail?"ACTIVA":"CERRADA"}</button>
@@ -2445,9 +2585,11 @@ export default function App({initialLang, initialPage} = {}) {
 
               {/* ── Export Calendar ── */}
               <div style={{marginTop:"1rem",marginBottom:"1.5rem"}}>
-                <a href="/api/export-ical" download="caonabo35.ics" style={{textDecoration:"none"}}>
-                  <button className="btn-sm-o" style={{marginBottom:"1rem"}}>📅 Exportar Calendario (.ics)</button>
-                </a>
+                <button type="button" className="btn-sm-o" style={{marginBottom:".75rem"}} onClick={()=>exportIcal(null)}>📅 Exportar Calendario (.ics)</button>
+                <p style={{fontFamily:"'Lato',sans-serif",fontSize:".74rem",color:C.taupe,margin:"0 0 .5rem"}}>Por habitación (para que cada anuncio de Airbnb reciba solo su habitación):</p>
+                <div style={{display:"flex",flexWrap:"wrap",gap:".4rem"}}>
+                  {rooms.map(r=><button key={r.id} type="button" className="btn-sm-o" style={{minHeight:40}} onClick={()=>exportIcal(r)}>{r.name}</button>)}
+                </div>
               </div>
 
               {/* ── Per-Room Discounts ── */}
@@ -2493,33 +2635,13 @@ export default function App({initialLang, initialPage} = {}) {
             <ModalHdr title={editBooking?editBooking.guest:detailB?.guest} sub={editBooking?"EDITAR RESERVA":"DETALLE DE RESERVA"} onClose={()=>{setEditBooking(null);setDetailB(null);setEditBError("");}}/>
             <div style={{padding:"1.5rem 2rem"}}>
               {editBooking?(<>
-                {editBError&&<div className="error-banner">{editBError}</div>}
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1rem",marginBottom:"1rem"}}>
-                  <div style={{gridColumn:"1/-1"}}><FL>Nombre del Huésped</FL><Inp value={editBooking.guest||""} onChange={e=>setEditBooking({...editBooking,guest:e.target.value})}/></div>
-                  <div><FL>Email</FL><Inp type="email" value={editBooking.email||""} onChange={e=>setEditBooking({...editBooking,email:e.target.value})}/></div>
-                  <div><FL>Teléfono / WhatsApp</FL><Inp type="tel" value={editBooking.phone||""} onChange={e=>setEditBooking({...editBooking,phone:e.target.value})}/></div>
-                  <div><FL>Habitación</FL><Sel value={editBooking.room} onChange={e=>setEditBooking({...editBooking,room:parseInt(e.target.value)})}>{rooms.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</Sel></div>
-                  <div><FL>Fuente</FL><Sel value={editBooking.source} onChange={e=>setEditBooking({...editBooking,source:e.target.value})}>{["Direct","Airbnb","Booking.com","WhatsApp","Teléfono"].map(s=><option key={s}>{s}</option>)}</Sel></div>
-                  <div><FL>Check-in</FL><Inp type="date" value={editBooking.checkIn} onChange={e=>setEditBooking({...editBooking,checkIn:e.target.value})}/></div>
-                  <div><FL>Check-out</FL><Inp type="date" value={editBooking.checkOut} onChange={e=>setEditBooking({...editBooking,checkOut:e.target.value})}/></div>
-                  <div><FL>Huéspedes</FL><Sel value={editBooking.guests} onChange={e=>setEditBooking({...editBooking,guests:parseInt(e.target.value)})}>{[1,2,3,4].map(n=><option key={n} value={n}>{n}</option>)}</Sel></div>
-                  <div><FL>Estado</FL><Sel value={editBooking.status} onChange={e=>setEditBooking({...editBooking,status:e.target.value})}><option value="confirmed">Confirmada</option><option value="pending">Pendiente</option><option value="cancelled">Cancelada</option></Sel></div>
-                </div>
-                {editBooking.checkIn&&editBooking.checkOut&&editBooking.checkIn<editBooking.checkOut&&(()=>{
-                  const rm=rooms.find(r=>r.id===editBooking.room);
-                  const p=calcPrice(rm?.price||0,editBooking.checkIn,editBooking.checkOut,null,seasons,rm?.id);
-                  return(
-                    <div className="price-breakdown">
-                      <div className="price-row"><span>${rm?.price} × {p.nights} noches</span><span>{fmtMoney(p.subtotal)}</span></div>
-                      <div className="price-row total"><span>Total</span><span>{fmtMoney(p.total)}</span></div>
-                    </div>
-                  );
-                })()}
-                <div style={{marginBottom:"1rem"}}><FL>Notas</FL><Inp value={editBooking.notes||""} onChange={e=>setEditBooking({...editBooking,notes:e.target.value})}/></div>
-                <label style={{display:"flex",alignItems:"center",gap:".5rem",fontFamily:"'Lato',sans-serif",fontSize:".83rem",cursor:"pointer",marginBottom:"1.4rem"}}><input type="checkbox" checked={editBooking.paid} onChange={e=>setEditBooking({...editBooking,paid:e.target.checked})}/> Marcar como pagado</label>
+                {editBError&&<div className="error-banner" role="alert">{editBError}</div>}
+                {bookingFields(editBooking,setEditBooking,"eb",STATUS_OPTIONS)}
+                {totalBox(bookings.find(x=>x.id===editBooking.id),editBooking,setEditBooking,"eb")}
+                <label style={{display:"flex",alignItems:"center",gap:".5rem",fontFamily:"'Lato',sans-serif",fontSize:".83rem",cursor:"pointer",marginBottom:"1.4rem",minHeight:44}}><input type="checkbox" checked={!!editBooking.paid} onChange={e=>setEditBooking({...editBooking,paid:e.target.checked})} style={{width:20,height:20}}/> Pagado</label>
                 <div style={{display:"flex",gap:".65rem",flexWrap:"wrap"}}>
-                  <button className="btn-gold" style={{flex:1}} onClick={()=>saveBooking(editBooking)}>GUARDAR CAMBIOS</button>
-                  <button className="btn-danger" style={{padding:".75rem 1.25rem"}} onClick={()=>deleteBooking(editBooking.id)}>Eliminar</button>
+                  <button className="btn-gold" style={{flex:"1 1 200px"}} disabled={saving} onClick={()=>saveBooking(editBooking)}>{saving?"GUARDANDO…":"GUARDAR CAMBIOS"}</button>
+                  <button type="button" className="btn-out lt" style={{padding:".75rem 1.1rem",color:C.danger,borderColor:C.danger}} onClick={()=>setBookingAction(bookings.find(x=>x.id===editBooking.id)||editBooking)}>Cancelar o eliminar…</button>
                 </div>
               </>):(
                 <div>
@@ -2538,7 +2660,7 @@ export default function App({initialLang, initialPage} = {}) {
                     {detailB?.status==="confirmed"&&<button style={{padding:".72rem 1.3rem",background:"#1565C0",color:"#fff",border:"none",borderRadius:4,fontFamily:"'Lato',sans-serif",fontWeight:700,fontSize:".78rem",cursor:"pointer",letterSpacing:".08em"}} onClick={()=>checkInGuest(detailB.id)}>🏨 Check In</button>}
                     {detailB?.status==="checked_in"&&<button style={{padding:".72rem 1.3rem",background:"#6A1B9A",color:"#fff",border:"none",borderRadius:4,fontFamily:"'Lato',sans-serif",fontWeight:700,fontSize:".78rem",cursor:"pointer",letterSpacing:".08em"}} onClick={()=>checkOutGuest(detailB.id)}>🚪 Check Out</button>}
                     {!detailB?.paid&&(detailB?.status==="confirmed"||detailB?.status==="checked_in")&&<button className="btn-success" style={{padding:".72rem 1.3rem"}} onClick={()=>{markPaid(detailB.id);setDetailB({...detailB,paid:true});}}>$ Pagado</button>}
-                    <a href={`https://wa.me/${(detailB?.phone||"").replace(/\D/g,"")}`} style={{textDecoration:"none"}}><button className="btn-out" style={{padding:".65rem 1.2rem",fontSize:".7rem"}}>WhatsApp</button></a>
+                    {waLinkFor(detailB?.phone)&&<a href={waLinkFor(detailB?.phone)} target="_blank" rel="noopener noreferrer" className="btn-out" style={{padding:".65rem 1.2rem",fontSize:".7rem"}}>WhatsApp</a>}
                   </div>
                 </div>
               )}
@@ -2551,33 +2673,44 @@ export default function App({initialLang, initialPage} = {}) {
           <ModalBox>
             <ModalHdr title="Nueva Reserva Manual" sub="CREAR RESERVA" onClose={()=>{setNewBookModal(false);setNewBError("");}}/>
             <div style={{padding:"1.5rem 2rem"}}>
-              {newBError&&<div className="error-banner">{newBError}</div>}
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1rem",marginBottom:"1rem"}}>
-                <div style={{gridColumn:"1/-1"}}><FL>Nombre del Huésped *</FL><Inp value={newB.guest} onChange={e=>setNewB({...newB,guest:e.target.value})}/></div>
-                <div><FL>Email</FL><Inp type="email" value={newB.email} onChange={e=>setNewB({...newB,email:e.target.value})}/></div>
-                <div><FL>Teléfono / WhatsApp</FL><Inp type="tel" value={newB.phone} onChange={e=>setNewB({...newB,phone:e.target.value})}/></div>
-                <div><FL>Habitación *</FL><Sel value={newB.room} onChange={e=>setNewB({...newB,room:parseInt(e.target.value)})}>{rooms.map(r=><option key={r.id} value={r.id}>{r.name} · ${r.price}/noche</option>)}</Sel></div>
-                <div><FL>Fuente</FL><Sel value={newB.source} onChange={e=>setNewB({...newB,source:e.target.value})}>{["Direct","Airbnb","Booking.com","WhatsApp","Teléfono"].map(s=><option key={s}>{s}</option>)}</Sel></div>
-                <div><FL>Check-in *</FL><Inp type="date" value={newB.checkIn} onChange={e=>setNewB({...newB,checkIn:e.target.value})}/></div>
-                <div><FL>Check-out *</FL><Inp type="date" value={newB.checkOut} onChange={e=>setNewB({...newB,checkOut:e.target.value})}/></div>
-                <div><FL>Huéspedes</FL><Sel value={newB.guests} onChange={e=>setNewB({...newB,guests:parseInt(e.target.value)})}>{[1,2,3,4].map(n=><option key={n} value={n}>{n}</option>)}</Sel></div>
-                <div><FL>Estado</FL><Sel value={newB.status} onChange={e=>setNewB({...newB,status:e.target.value})}><option value="confirmed">Confirmada</option><option value="pending">Pendiente</option></Sel></div>
-                <div style={{gridColumn:"1/-1"}}><FL>Notas</FL><Inp value={newB.notes} onChange={e=>setNewB({...newB,notes:e.target.value})}/></div>
-              </div>
-              {newB.checkIn&&newB.checkOut&&newB.checkIn<newB.checkOut&&(()=>{
-                const rm=rooms.find(r=>r.id===newB.room);
-                const p=calcPrice(rm?.price||0,newB.checkIn,newB.checkOut,null,seasons,rm?.id);
-                return(
-                  <div className="price-breakdown">
-                    <div className="price-row"><span>${rm?.price} × {p.nights} noches</span><span>{fmtMoney(p.subtotal)}</span></div>
-                    <div className="price-row total"><span>Total</span><span>{fmtMoney(p.total)}</span></div>
-                  </div>
-                );
-              })()}
-              <button className="btn-gold" style={{width:"100%",marginTop:".5rem"}} onClick={addBookingAdmin}>CREAR RESERVA</button>
+              {newBError&&<div className="error-banner" role="alert">{newBError}</div>}
+              {bookingFields(newB,setNewB,"nb",STATUS_OPTIONS.filter(([v])=>v!=="cancelled"))}
+              {totalBox(null,newB,setNewB,"nb")}
+              <label style={{display:"flex",alignItems:"center",gap:".5rem",fontFamily:"'Lato',sans-serif",fontSize:".83rem",cursor:"pointer",marginBottom:"1rem",minHeight:44}}><input type="checkbox" checked={!!newB.paid} onChange={e=>setNewB({...newB,paid:e.target.checked})} style={{width:20,height:20}}/> Pagado</label>
+              <button className="btn-gold" style={{width:"100%",marginTop:".5rem"}} disabled={saving} onClick={addBookingAdmin}>{saving?"GUARDANDO…":"CREAR RESERVA"}</button>
             </div>
           </ModalBox>
         </Backdrop>)}
+
+        {/* Cancel (default) or permanently delete — never one tap */}
+        {bookingAction&&(()=>{
+          const bk = bookingAction;
+          const n = isYmd(bk.checkIn)&&isYmd(bk.checkOut) ? nightsBetween(bk.checkIn,bk.checkOut) : 0;
+          const rn = rooms.find(r=>String(r.id)===String(bk.room))?.name || ("Hab. "+bk.room);
+          return(
+          <Backdrop onClose={()=>setBookingAction(null)}>
+            <ModalBox width={480}>
+              <ModalHdr title="¿Cancelar o eliminar?" sub="CANCEL OR DELETE BOOKING" onClose={()=>setBookingAction(null)} closeLabel="Volver"/>
+              <div style={{padding:"1.4rem 2rem 1.6rem",fontFamily:"'Lato',sans-serif"}} className="modal-pad">
+                <div style={{background:C.smoke,borderLeft:`3px solid ${C.gold}`,padding:".8rem 1rem",marginBottom:"1.1rem",fontSize:".86rem",color:C.ebony,lineHeight:1.6}}>
+                  <strong>{bk.guest}</strong> · {rn}<br/>{bk.checkIn} → {bk.checkOut} · {n} noche{n!==1?"s":""} · {fmtMoney(bk.total||0)}
+                </div>
+                {bk.status!=="cancelled"&&<>
+                  <button type="button" data-autofocus className="btn-gold" style={{width:"100%",flexDirection:"column",gap:".2rem",padding:".85rem 1rem"}} onClick={()=>cancelBooking(bk.id)}>
+                    <span>Cancelar reserva (recomendado)</span>
+                    <span style={{fontWeight:400,letterSpacing:".02em",textTransform:"none",fontSize:".72rem"}}>Cancel booking — se guarda en el historial y libera las fechas</span>
+                  </button>
+                  <div style={{height:".7rem"}}/>
+                </>}
+                <button type="button" className="btn-danger" style={{width:"100%",padding:".8rem 1rem",fontSize:".74rem"}}
+                  onClick={()=>{ if(window.confirm(`¿Eliminar PARA SIEMPRE la reserva de ${bk.guest} (${bk.checkIn} → ${bk.checkOut})? No se puede deshacer.\n\nDelete ${bk.guest}'s booking (${bk.checkIn} → ${bk.checkOut}) permanently? This cannot be undone.`)) deleteBooking(bk.id); }}>
+                  🗑 Eliminar para siempre · Delete permanently
+                </button>
+                <button type="button" className="btn-out lt" style={{width:"100%",marginTop:".7rem"}} onClick={()=>setBookingAction(null)}>Volver · Go back</button>
+              </div>
+            </ModalBox>
+          </Backdrop>);
+        })()}
 
         {/* Edit Room */}
         {editRoom&&editRoomD&&(<Backdrop onClose={()=>{setEditRoom(null);setEditRoomD(null);}}>
@@ -2664,12 +2797,9 @@ export default function App({initialLang, initialPage} = {}) {
               <FL>Tu respuesta</FL>
               <textarea value={replyTxt} onChange={e=>setReplyTxt(e.target.value)} style={{width:"100%",padding:".75rem",border:`1px solid ${C.sand}`,fontFamily:"'Lato',sans-serif",fontSize:".88rem",height:110,resize:"vertical",outline:"none",marginBottom:"1.25rem",color:C.ebony}} placeholder="Escribe tu respuesta..."/>
               <div style={{display:"flex",gap:".65rem",flexWrap:"wrap"}}>
-                <a href={`https://wa.me/${(replyModal.phone||settings.whatsapp).replace(/\D/g,"")}?text=${encodeURIComponent(replyTxt)}`} target="_blank" rel="noopener" style={{textDecoration:"none",flex:1}}>
-                  <button className="btn-gold" style={{width:"100%"}}>📱 Enviar por WhatsApp</button>
-                </a>
-                <a href={`mailto:${replyModal.email}?subject=Caonabo 35&body=${encodeURIComponent(replyTxt)}`} style={{textDecoration:"none"}}>
-                  <button className="btn-out">📧 Email</button>
-                </a>
+                {waLinkFor(replyModal.phone)&&<a href={waLinkFor(replyModal.phone,replyTxt)} target="_blank" rel="noopener noreferrer" className="btn-gold" style={{flex:1}}>📱 Enviar por WhatsApp</a>}
+                {replyModal.email&&<a href={`mailto:${replyModal.email}?subject=${encodeURIComponent("Caonabo 35")}&body=${encodeURIComponent(replyTxt)}`} className="btn-out">📧 Email</a>}
+                {!waLinkFor(replyModal.phone)&&!replyModal.email&&<p style={{fontFamily:"'Lato',sans-serif",fontSize:".8rem",color:C.taupe}}>Este mensaje no tiene teléfono ni email para responder.</p>}
               </div>
             </div>
           </ModalBox>
@@ -2717,12 +2847,14 @@ export default function App({initialLang, initialPage} = {}) {
           <ModalBox>
             <ModalHdr title="Editar Configuración" onClose={()=>setEditSettings(false)}/>
             <div style={{padding:"1.5rem 2rem"}}>
-              {[["propName","Nombre del Negocio"],["phone","Teléfono"],["whatsapp","WhatsApp (solo números)"],["email","Email"],["checkIn","Hora Check-in"],["checkOut","Hora Check-out"],["instagram","Instagram"],["heroSubtitle","Subtítulo del Hero"]].map(([k,l])=>(
-                <div key={k} style={{marginBottom:".85rem"}}><FL>{l}</FL><Inp value={settDraft[k]} onChange={e=>setSettDraft({...settDraft,[k]:e.target.value})}/></div>
+              {settErr&&<div className="error-banner" role="alert">{settErr}</div>}
+              {[["propName","Nombre del Negocio"],["phone","Teléfono"],["whatsapp","WhatsApp (con código de país, ej. +1 809 603 3038)"],["email","Email"],["checkIn","Hora Check-in"],["checkOut","Hora Check-out"],["instagram","Instagram"],["heroSubtitle","Subtítulo del Hero"]].map(([k,l])=>(
+                <div key={k} style={{marginBottom:".85rem"}}><FL htmlFor={`st-${k}`}>{l}</FL><Inp id={`st-${k}`} type={k==="whatsapp"||k==="phone"?"tel":"text"} value={settDraft[k]??""} onChange={e=>setSettDraft({...settDraft,[k]:e.target.value})}/></div>
               ))}
+              <div style={{marginBottom:".85rem"}}><FL htmlFor="st-min">Noches mínimas por reserva (web)</FL><Inp id="st-min" type="number" min="1" max={MAX_NIGHTS} value={settDraft.minNights??1} onChange={e=>setSettDraft({...settDraft,minNights:e.target.value})}/></div>
               <div style={{marginBottom:".85rem"}}><FL>Dirección</FL><textarea value={settDraft.address} onChange={e=>setSettDraft({...settDraft,address:e.target.value})} style={{width:"100%",padding:".7rem 1rem",border:`1px solid ${C.sand}`,fontFamily:"'Lato',sans-serif",fontSize:".88rem",background:C.smoke,height:65,resize:"vertical",outline:"none",color:C.ebony}}/></div>
-              <div style={{marginBottom:"1.25rem"}}><FL>Impuesto (%)</FL><Inp type="number" value={settDraft.taxRate} onChange={e=>setSettDraft({...settDraft,taxRate:parseFloat(e.target.value)||0})}/></div>
-              <button className="btn-gold" style={{width:"100%"}} onClick={async()=>{const{error}=await supabase.from("settings").update({hotel_name:settDraft.propName,address:settDraft.address,phone:settDraft.phone,whatsapp:settDraft.whatsapp,email:settDraft.email,instagram:settDraft.instagram,hero_subtitle:settDraft.heroSubtitle,check_in_time:settDraft.checkIn,check_out_time:settDraft.checkOut,min_nights:settDraft.minNights,tax_rate:settDraft.taxRate}).eq("id",1);if(error){showToast("❌ Error al guardar: "+error.message);return;}setSettings(settDraft);setEditSettings(false);showToast("Configuración guardada ✓");}}>GUARDAR</button>
+              <div style={{marginBottom:"1.25rem"}}><FL>Impuesto (%)</FL><Inp type="number" value={settDraft.taxRate??0} onChange={e=>setSettDraft({...settDraft,taxRate:e.target.value===""?"":Number(e.target.value)})}/></div>
+              <button className="btn-gold" style={{width:"100%"}} disabled={saving} onClick={saveSettings}>{saving?"GUARDANDO…":"GUARDAR"}</button>
             </div>
           </ModalBox>
         </Backdrop>)}
@@ -2736,7 +2868,7 @@ export default function App({initialLang, initialPage} = {}) {
                 <div key={f} style={{marginBottom:".85rem"}}><FL>{l}</FL><Inp type={tp} value={newMsg[f]} onChange={e=>setNewMsg({...newMsg,[f]:e.target.value})}/></div>
               ))}
               <div style={{marginBottom:"1.25rem"}}><FL>Mensaje</FL><textarea value={newMsg.message} onChange={e=>setNewMsg({...newMsg,message:e.target.value})} style={{width:"100%",padding:".7rem",border:`1px solid ${C.sand}`,fontFamily:"'Lato',sans-serif",fontSize:".88rem",background:C.smoke,height:80,resize:"vertical",outline:"none",color:C.ebony}}/></div>
-              <button className="btn-gold" style={{width:"100%"}} onClick={()=>{if(!newMsg.guest||!newMsg.message)return;setMessages([...messages,{...newMsg,id:Date.now(),date:TODAY,read:true}]);setAddMsgModal(false);setNewMsg({guest:"",email:"",phone:"",message:""});showToast("Mensaje añadido ✓");}}>GUARDAR</button>
+              <button className="btn-gold" style={{width:"100%"}} disabled={saving} onClick={addMessage}>{saving?"GUARDANDO…":"GUARDAR"}</button>
             </div>
           </ModalBox>
         </Backdrop>)}
@@ -2757,7 +2889,8 @@ export default function App({initialLang, initialPage} = {}) {
   const amenityLabel = (a) => AMENITY_LABELS[a] ? AMENITY_LABELS[a][L] : a;
   const photoLabel = (l) => lang==="en" ? (PHOTO_LABELS_EN[l] || String(l||"").replace(/^Foto (\d+)$/,"Photo $1")) : l;
   const galLabel = (g) => lang==="es" ? g.label : (g.labelEn||g.label);
-  const searchValid = !validateStay(availDates.checkIn, availDates.checkOut, today);
+  const searchErr = validateStay(availDates.checkIn, availDates.checkOut, today, minNights);
+  const searchValid = !searchErr;
   const datesChecked = bookedRoomIds!==null;
   const availableCount = datesChecked ? rooms.filter(r=>!isRoomClosed(r)&&!bookedRoomIds.includes(r.id)).length : null;
   const anyModalOpen = bookModal||galOpen!==null||roomLightbox!==null||!!amenModal||showPrivacy||guestPortalOpen||!!reviewParam;
@@ -2895,6 +3028,7 @@ export default function App({initialLang, initialPage} = {}) {
             </div>
             <div aria-live="polite" style={{textAlign:"center",fontFamily:"'Lato',sans-serif",fontSize:".82rem"}}>
               {availError&&<p style={{marginTop:"1rem",color:"#F4B6A8"}}>{availError}</p>}
+              {searchErr?.code==="min_nights"&&<p style={{marginTop:"1rem",color:"#F4B6A8"}}>{stayErrorText("min_nights",lang,searchErr.min)}</p>}
               {datesChecked&&!availError&&(
                 <p style={{marginTop:"1rem",color:C.taupe}}>
                   {availableCount===rooms.length
@@ -2908,7 +3042,7 @@ export default function App({initialLang, initialPage} = {}) {
           </form>
 
           <div className="lt" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(340px,100%),1fr))",gap:"1.5rem"}}>
-            {(()=>{const _tod=new Date();const todaySeason=seasons.find(s=>{if(!s||s.type==='range')return false;const y=_tod.getFullYear();const sStart=new Date(`${parseInt(s.startMonth)>parseInt(s.endMonth)?y-1:y}-${s.startMonth}-${s.startDay}`);const sEnd=new Date(`${y}-${s.endMonth}-${s.endDay}`);return _tod>=sStart&&_tod<=sEnd;});return rooms.map(room=>{
+            {(()=>{const todaySeason=activeRecurringSeason(seasons,today);return rooms.map(room=>{
               const closed = isRoomClosed(room);
               const bookedHere = datesChecked && bookedRoomIds.includes(room.id);
               const unavailable = closed || bookedHere;
@@ -3146,7 +3280,7 @@ export default function App({initialLang, initialPage} = {}) {
         const f = bookForm;
         const err = fieldErrors;
         const cap = Math.max(1, Number(rm.guests)||2);
-        const stayErr = validateStay(f.checkIn, f.checkOut, today);
+        const stayErr = validateStay(f.checkIn, f.checkOut, today, minNights);
         const q = quoteRoom(rm, f.checkIn, f.checkOut);
         const key = `${rm.id}|${f.checkIn}|${f.checkOut}`;
         const st = stayErr ? "idle" : (modalAvail.key===key ? modalAvail.status : "checking");
@@ -3183,7 +3317,10 @@ export default function App({initialLang, initialPage} = {}) {
                       {errEl("guests")}</div>
                   </div>
                   <div aria-live="polite" style={{marginTop:".9rem",fontFamily:"'Lato',sans-serif",fontSize:".82rem"}}>
-                    {stayErr&&!err.checkIn&&!err.checkOut&&<p style={{color:C.taupeText}}>{t("Elige tus fechas para ver la disponibilidad y el precio.","Choose your dates to see availability and price.")}</p>}
+                    {minNights>1&&<p style={{color:C.taupeText,marginBottom:".4rem"}}>{t(`Estadía mínima: ${minNights} noches.`,`Minimum stay: ${minNights} nights.`)}</p>}
+                    {stayErr&&!err.checkIn&&!err.checkOut&&(stayErr.code==="min_nights"
+                      ? <p style={{color:C.danger}}>{stayErrorText("min_nights",lang,stayErr.min)}</p>
+                      : <p style={{color:C.taupeText}}>{t("Elige tus fechas para ver la disponibilidad y el precio.","Choose your dates to see availability and price.")}</p>)}
                     {st==="checking"&&<p style={{color:C.taupeText}}>{t("Verificando disponibilidad…","Checking availability…")}</p>}
                     {st==="available"&&<div className="success-banner">✓ {t("¡Disponible! La habitación está libre para esas fechas.","Available! The room is free for those dates.")}</div>}
                     {st==="unavailable"&&<div className="error-banner" style={{marginBottom:0}}>{isRoomClosed(rm)?t("Esta habitación no está disponible por ahora.","This room isn’t available right now."):t("Esta habitación no está disponible para esas fechas. Prueba otras fechas u otra habitación.","This room isn’t available for those dates. Try other dates or another room.")}{" "}<a href={waLink(t(`Hola, busco habitación del ${f.checkIn} al ${f.checkOut}.`,`Hi, I'm looking for a room from ${f.checkIn} to ${f.checkOut}.`))} target="_blank" rel="noopener noreferrer" style={{color:"#8E1B1B",fontWeight:700}}>{t("Pregúntanos por WhatsApp","Ask us on WhatsApp")}</a></div>}
