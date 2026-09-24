@@ -134,6 +134,7 @@ function buildModel(raw) {
       name: { es: name, en: nameEn || `Room ${numLabel}` },
       bed: clean(pick(row.beds, d.beds)), guests, size, m2: Number.isFinite(m2) && m2 > 0 ? m2 : null,
       desc: { es: desc, en: DESC_EN[desc] || '' }, amenities, photo, price: direct,
+      available: row.available !== false, // owner's "close room" toggle; the SPA shows NO DISPONIBLE
     };
   });
   const anchors = new Set();
@@ -144,7 +145,8 @@ function buildModel(raw) {
   const addressLines = String(s.address).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const handle = String(s.instagram).trim().replace(/^@/, '').replace(/^https?:\/\/(www\.)?instagram\.com\//, '').replace(/\/+$/, '');
   if (!waDigits || !addressLines.length) throw new Error('settings incomplete');
-  const prices = rooms.map((r) => r.price);
+  // Closed rooms stay listed (the hotel still has them) but are never priced or offered.
+  const prices = rooms.filter((r) => r.available).map((r) => r.price);
   return {
     hotel: {
       name: clean(s.hotel_name) || 'Caonabo 35',
@@ -158,7 +160,7 @@ function buildModel(raw) {
       heroSubtitle: { es: clean(s.hero_subtitle), en: HERO_EN[clean(s.hero_subtitle)] || '' },
     },
     rooms,
-    minPrice: Math.min(...prices), maxPrice: Math.max(...prices),
+    minPrice: prices.length ? Math.min(...prices) : null, maxPrice: prices.length ? Math.max(...prices) : null,
   };
 }
 
@@ -200,7 +202,10 @@ function extraAmenities(m) {
   return [...extra.values()];
 }
 const inEveryRoom = (m, L) => [L === 'es' ? 'baño privado' : 'a private bathroom', ...commonAmenities(m).map((a) => amenityLabel(a, L))];
+const openRooms = (m) => m.rooms.filter((r) => r.available);
+const priceRangeText = (m) => (m.minPrice === m.maxPrice ? usd(m.minPrice) : `${usd(m.minPrice)}–${m.maxPrice}`);
 function priceSpan(m, L) {
+  if (m.minPrice === null) return '';
   if (m.minPrice === m.maxPrice) return L === 'es' ? `${usd(m.minPrice)} la noche` : `${usd(m.minPrice)} a night`;
   return L === 'es' ? `de ${usd(m.minPrice)} a ${usd(m.maxPrice)} la noche` : `from ${usd(m.minPrice)} to ${usd(m.maxPrice)} a night`;
 }
@@ -221,12 +226,12 @@ function meta(pg, m) {
   const every = join(inEveryRoom(m, pg.lang), pg.lang);
   if (pg.lang === 'es') {
     return pg.page === 'home'
-      ? { title: 'Caonabo 35 · Hotel boutique en Santo Domingo', description: `Hotel boutique en Santo Domingo, República Dominicana: ${n} habitaciones con ${every}, desde ${usd(m.minPrice)} la noche en reserva directa.` }
-      : { title: 'Habitaciones y precios · Caonabo 35, Santo Domingo', description: `Compara las ${n} habitaciones de Caonabo 35: tipo de cama, capacidad, tamaño y tarifa directa desde ${usd(m.minPrice)} la noche. Reserva en línea o por WhatsApp.` };
+      ? { title: 'Caonabo 35 · Hotel boutique en Santo Domingo', description: `Hotel boutique en Santo Domingo, República Dominicana: ${n} habitaciones con ${every}${m.minPrice === null ? '. Reserva directa en la web o por WhatsApp.' : `, desde ${usd(m.minPrice)} la noche en reserva directa.`}` }
+      : { title: 'Habitaciones y precios · Caonabo 35, Santo Domingo', description: `Compara las ${n} habitaciones de Caonabo 35: tipo de cama, capacidad, tamaño${m.minPrice === null ? ' y tarifas directas' : ` y tarifa directa desde ${usd(m.minPrice)} la noche`}. Reserva en línea o por WhatsApp.` };
   }
   return pg.page === 'home'
-    ? { title: 'Caonabo 35 · Boutique Hotel in Santo Domingo', description: `Boutique hotel in Santo Domingo, Dominican Republic: ${n} rooms with ${every}, from ${usd(m.minPrice)} a night when you book direct.` }
-    : { title: 'Rooms & Rates · Caonabo 35, Santo Domingo', description: `Compare all ${n} rooms at Caonabo 35: bed type, capacity, size and direct rates from ${usd(m.minPrice)} a night. Book online or on WhatsApp.` };
+    ? { title: 'Caonabo 35 · Boutique Hotel in Santo Domingo', description: `Boutique hotel in Santo Domingo, Dominican Republic: ${n} rooms with ${every}${m.minPrice === null ? '. Book direct online or on WhatsApp.' : `, from ${usd(m.minPrice)} a night when you book direct.`}` }
+    : { title: 'Rooms & Rates · Caonabo 35, Santo Domingo', description: `Compare all ${n} rooms at Caonabo 35: bed type, capacity, size and direct rates${m.minPrice === null ? '' : ` from ${usd(m.minPrice)} a night`}. Book online or on WhatsApp.` };
 }
 
 function faq(m, L) {
@@ -241,7 +246,7 @@ function faq(m, L) {
     return [
       ['¿A qué hora son el check-in y el check-out?', `El check-in es a partir de las ${h.checkIn} y el check-out, hasta las ${h.checkOut}.`],
       ['¿Cómo puedo reservar?', `Elige tu habitación y tus fechas en caonabo35.com y envía la solicitud; el hotel te confirma la reserva. También puedes reservar por WhatsApp al ${h.phone}.`],
-      ['¿Cuánto cuesta una noche?', `La tarifa directa va ${priceSpan(m, 'es')}, según la habitación. Puede variar según la fecha: al elegir tus fechas verás el total, que el hotel confirma con tu reserva.`],
+      ['¿Cuánto cuesta una noche?', m.minPrice === null ? `Escríbenos por WhatsApp al ${h.phone} para consultar tarifas y disponibilidad.` : `La tarifa directa va ${priceSpan(m, 'es')}, según la habitación. Puede variar según la fecha: al elegir tus fechas verás el total, que el hotel confirma con tu reserva.`],
       ['¿Cuántas personas caben por habitación?', guests.length === 1 ? `Todas las habitaciones son para un máximo de ${guests[0]} ${guests[0] === 1 ? 'huésped' : 'huéspedes'}.` : `Entre ${Math.min(...guests)} y ${Math.max(...guests)} huéspedes, según la habitación.`],
       ['¿Qué incluyen las habitaciones?', `Todas tienen ${every}${extraText.length ? `; ${extraText.join('; ')}` : ''}.`],
       ['¿Cuál es la política de cancelación?', `La cancelación es gratuita con ${CANCELLATION_HOURS} horas de anticipación.`],
@@ -252,7 +257,7 @@ function faq(m, L) {
   return [
     ['What time are check-in and check-out?', `Check-in is from ${h.checkIn}; check-out is by ${h.checkOut}.`],
     ['How do I book?', `Choose your room and dates at caonabo35.com and send your request; the hotel then confirms your booking. You can also book on WhatsApp at ${h.phone}.`],
-    ['How much is a night?', `Direct rates run ${priceSpan(m, 'en')}, depending on the room. Rates can vary by date: once you pick your dates you'll see the total, which the hotel confirms with your booking.`],
+    ['How much is a night?', m.minPrice === null ? `Message us on WhatsApp at ${h.phone} for rates and availability.` : `Direct rates run ${priceSpan(m, 'en')}, depending on the room. Rates can vary by date: once you pick your dates you'll see the total, which the hotel confirms with your booking.`],
     ['How many guests can stay in a room?', guests.length === 1 ? `Every room sleeps up to ${guests[0]} ${guests[0] === 1 ? 'guest' : 'guests'}.` : `Between ${Math.min(...guests)} and ${Math.max(...guests)} guests, depending on the room.`],
     ['What do the rooms include?', `Every room has ${every}.${extraText.length ? ` ${extraText.join('. ')}.` : ''}`],
     ['What is the cancellation policy?', `Cancellation is free with ${CANCELLATION_HOURS} hours' notice.`],
@@ -319,6 +324,7 @@ body:has(.c35s){margin:0}
 .c35s .price{color:var(--ma);font-size:.85rem}
 .c35s .room .price{margin-top:auto;padding-top:.3rem}
 .c35s .price strong{font-family:var(--se);font-size:1.7rem;font-weight:600;color:var(--eb)}
+.c35s .price.na{font-style:italic;font-weight:700;letter-spacing:.04em}
 .c35s .more{align-self:flex-start;color:var(--ma);font-size:.7rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;text-decoration:none;border-bottom:1px solid var(--go);padding-bottom:.1rem}
 .c35s .center{text-align:center;margin-top:2.4rem}
 .c35s .space h3{font-size:1.3rem;font-weight:500;margin:.8rem 0 .25rem}
@@ -366,13 +372,14 @@ const COPY = {
     h1k: 'Hotel boutique en Santo Domingo', seeRooms: 'Ver habitaciones y precios', bookWa: 'Reservar por WhatsApp',
     waHello: '¡Hola! Quiero reservar en Caonabo 35.', waRoom: (n) => `¡Hola! Quiero reservar la ${n} en Caonabo 35.`,
     factRooms: 'habitaciones', factFrom: 'desde / noche', roomsEye: 'Alojamiento', roomsH2: 'Nuestras habitaciones',
-    roomsLead: (m) => `${m.rooms.length} habitaciones con ${join(inEveryRoom(m, 'es'), 'es')}. Tarifa directa ${priceSpan(m, 'es')}.`,
+    roomsLead: (m) => `${m.rooms.length} habitaciones con ${join(inEveryRoom(m, 'es'), 'es')}.${m.minPrice === null ? '' : ` Tarifa directa ${priceSpan(m, 'es')}.`}`,
+    unavailable: 'No disponible temporalmente',
     from: 'desde', perNight: 'noche', details: 'Ver detalles', compare: 'Comparar todas las habitaciones',
     spacesEye: 'Instalaciones', spacesH2: 'Espacios y servicios', faqEye: 'Antes de reservar', faqH2: 'Preguntas frecuentes',
     contactEye: 'Contacto', contactH2: 'Encuéntranos', address: 'Dirección', waPhone: 'WhatsApp y teléfono', times: 'Check-in / check-out',
     writeWa: 'Escríbenos por WhatsApp', footer: 'Hotel boutique en Santo Domingo, República Dominicana',
     home: 'Inicio', roomsTitle: 'Habitaciones y precios', h1rooms: 'Habitaciones y precios en Caonabo 35, Santo Domingo',
-    roomsPageLead: (m) => `Las ${m.rooms.length} habitaciones tienen ${join(inEveryRoom(m, 'es'), 'es')}. Estas son nuestras tarifas directas por noche, en dólares estadounidenses (US$).`,
+    roomsPageLead: (m) => `Las ${m.rooms.length} habitaciones tienen ${join(inEveryRoom(m, 'es'), 'es')}.${m.minPrice === null ? '' : ' Estas son nuestras tarifas directas por noche, en dólares estadounidenses (US$).'}`,
     caption: 'Comparativa de habitaciones', thRoom: 'Habitación', thBed: 'Cama', thGuests: 'Huéspedes', thSize: 'Tamaño', thRate: 'Tarifa directa',
     rateNote: 'Tarifas por noche para reservas directas. Pueden variar según la fecha: al elegir tus fechas verás el total, que el hotel confirma con tu reserva.',
     includes: 'Incluye', infoH2: 'Información útil', ciLabel: 'Check-in', coLabel: 'Check-out', ci: (t) => `A partir de las ${t}`, co: (t) => `Hasta las ${t}`,
@@ -387,13 +394,14 @@ const COPY = {
     h1k: 'Boutique hotel in Santo Domingo', seeRooms: 'See rooms & rates', bookWa: 'Book on WhatsApp',
     waHello: "Hi! I'd like to book at Caonabo 35.", waRoom: (n) => `Hi! I'd like to book ${n} at Caonabo 35.`,
     factRooms: 'rooms', factFrom: 'from / night', roomsEye: 'Accommodation', roomsH2: 'Our rooms',
-    roomsLead: (m) => `${m.rooms.length} rooms, each with ${join(inEveryRoom(m, 'en'), 'en')}. Direct rates ${priceSpan(m, 'en')}.`,
+    roomsLead: (m) => `${m.rooms.length} rooms, each with ${join(inEveryRoom(m, 'en'), 'en')}.${m.minPrice === null ? '' : ` Direct rates ${priceSpan(m, 'en')}.`}`,
+    unavailable: 'Temporarily unavailable',
     from: 'from', perNight: 'night', details: 'View details', compare: 'Compare all rooms',
     spacesEye: 'Facilities', spacesH2: 'Spaces & services', faqEye: 'Before you book', faqH2: 'Frequently asked questions',
     contactEye: 'Contact', contactH2: 'Find us', address: 'Address', waPhone: 'WhatsApp & phone', times: 'Check-in / check-out',
     writeWa: 'Message us on WhatsApp', footer: 'Boutique hotel in Santo Domingo, Dominican Republic',
     home: 'Home', roomsTitle: 'Rooms & rates', h1rooms: 'Rooms and rates at Caonabo 35, Santo Domingo',
-    roomsPageLead: (m) => `All ${m.rooms.length} rooms have ${join(inEveryRoom(m, 'en'), 'en')}. These are our direct nightly rates, in US dollars (US$).`,
+    roomsPageLead: (m) => `All ${m.rooms.length} rooms have ${join(inEveryRoom(m, 'en'), 'en')}.${m.minPrice === null ? '' : ' These are our direct nightly rates, in US dollars (US$).'}`,
     caption: 'Room comparison', thRoom: 'Room', thBed: 'Bed', thGuests: 'Guests', thSize: 'Size', thRate: 'Direct rate',
     rateNote: "Nightly rates for direct bookings. Rates can vary by date: once you pick your dates you'll see the total, which the hotel confirms with your booking.",
     includes: 'Includes', infoH2: 'Good to know', ciLabel: 'Check-in', coLabel: 'Check-out', ci: (t) => `From ${t}`, co: (t) => `By ${t}`,
@@ -414,6 +422,8 @@ function header(pg) {
 <nav aria-label="${L === 'es' ? 'Principal' : 'Main'}"><ul><li><a href="${ALT.rooms[L]}">${c.rooms}</a></li><li><a href="${onHome('amenities')}">${c.spaces}</a></li><li><a href="${onHome('faq')}">${c.faqNav}</a></li><li><a href="${contact}">${c.contact}</a></li><li><a href="${switchHref(pg)}" hreflang="${other(L)}" lang="${other(L)}">${c.switchTo}</a></li></ul></nav></header>`;
 }
 
+const roomPrice = (r, c) => (r.available ? `<p class="price">${c.from} <strong>${usd(r.price)}</strong> / ${c.perNight}</p>` : `<p class="price na">${c.unavailable}</p>`);
+
 function roomCard(r, pg) {
   const c = COPY[pg.lang], L = pg.lang;
   return `<li><article class="room" id="${r.anchor}">
@@ -422,7 +432,7 @@ function roomCard(r, pg) {
 <p class="meta">${esc(bedLabel(r.bed, L))} · ${esc(guestsLabel(r.guests, L))} · ${esc(sizeLabel(r))}</p>
 ${r.desc[L] ? `<p class="desc">${esc(r.desc[L])}</p>` : ''}
 <ul class="tags">${r.amenities.map((a) => `<li>${esc(cap(amenityLabel(a, L)))}</li>`).join('')}</ul>
-<p class="price">${c.from} <strong>${usd(r.price)}</strong> / ${c.perNight}</p>
+${roomPrice(r, c)}
 <a class="more" href="${ALT.rooms[L]}#${r.anchor}">${c.details}</a></div></article></li>`;
 }
 
@@ -456,7 +466,7 @@ function homeBody(m, pg) {
 <h1 id="top-h"><span class="n">Caonabo <em>35</em></span> <span class="k">${c.h1k}</span></h1>
 <p class="sub">${esc(sub)}</p>
 <p class="btns"><a class="btn g" href="${ALT.rooms[L]}">${c.seeRooms}</a> <a class="btn o" href="${esc(waLink(m, c.waHello))}">${c.bookWa}</a></p>
-<dl class="facts"><div><dt>${c.factRooms}</dt><dd>${m.rooms.length}</dd></div><div><dt>${c.factFrom}</dt><dd>${usd(m.minPrice)}</dd></div>${h.checkIn ? `<div><dt>check-in</dt><dd>${esc(h.checkIn)}</dd></div>` : ''}${h.checkOut ? `<div><dt>check-out</dt><dd>${esc(h.checkOut)}</dd></div>` : ''}</dl></div></section>
+<dl class="facts"><div><dt>${c.factRooms}</dt><dd>${m.rooms.length}</dd></div>${m.minPrice === null ? '' : `<div><dt>${c.factFrom}</dt><dd>${usd(m.minPrice)}</dd></div>`}${h.checkIn ? `<div><dt>check-in</dt><dd>${esc(h.checkIn)}</dd></div>` : ''}${h.checkOut ? `<div><dt>check-out</dt><dd>${esc(h.checkOut)}</dd></div>` : ''}</dl></div></section>
 <section class="sec" id="rooms" aria-labelledby="rooms-h"><div class="wrap">
 <div class="hd"><p class="eye">${c.roomsEye}</p><h2 id="rooms-h">${c.roomsH2}</h2><p class="lead">${esc(c.roomsLead(m))}</p></div>
 <ul class="grid">${m.rooms.map((r) => roomCard(r, pg)).join('\n')}</ul>
@@ -489,7 +499,7 @@ function roomsBody(m, pg) {
 <p class="lead">${esc(c.roomsPageLead(m))}</p>
 <div class="tbl"><table><caption>${c.caption}</caption>
 <thead><tr><th scope="col">${c.thRoom}</th><th scope="col">${c.thBed}</th><th scope="col">${c.thGuests}</th><th scope="col">${c.thSize}</th><th scope="col">${c.thRate}</th></tr></thead>
-<tbody>${m.rooms.map((r) => `<tr><th scope="row"><a href="#${r.anchor}">${esc(r.name[L])}</a></th><td>${esc(cap(bedLabel(r.bed, L).replace(/^(Cama: |Cama |Bed: )/, '').replace(/ bed$/, '')))}</td><td>${r.guests}</td><td>${esc(sizeLabel(r))}</td><td class="p">${c.from} ${usd(r.price)}</td></tr>`).join('\n')}</tbody></table></div>
+<tbody>${m.rooms.map((r) => `<tr><th scope="row"><a href="#${r.anchor}">${esc(r.name[L])}</a></th><td>${esc(cap(bedLabel(r.bed, L).replace(/^(Cama: |Cama |Bed: )/, '').replace(/ bed$/, '')))}</td><td>${r.guests}</td><td>${esc(sizeLabel(r))}</td><td class="p">${r.available ? `${c.from} ${usd(r.price)}` : c.unavailable}</td></tr>`).join('\n')}</tbody></table></div>
 <p class="note">${c.rateNote}</p>
 </div></section>
 <section class="sec" id="rooms" aria-label="${c.rooms}"><div class="wrap">
@@ -499,8 +509,8 @@ ${m.rooms.map((r) => `<article class="detail" id="${r.anchor}">
 <p class="meta">${esc(bedLabel(r.bed, L))} · ${esc(guestsLabel(r.guests, L))} · ${esc(sizeLabel(r))}</p>
 ${r.desc[L] ? `<p class="desc">${esc(r.desc[L])}</p>` : ''}
 <p class="meta">${c.includes}: ${esc(join([L === 'es' ? 'baño privado' : 'private bathroom', ...r.amenities.map((a) => amenityLabel(a, L))], L))}</p>
-<p class="price">${c.from} <strong>${usd(r.price)}</strong> / ${c.perNight}</p>
-<a class="btn g" href="${esc(waLink(m, c.waRoom(r.name[L])))}">${c.bookWa}</a></div></article>`).join('\n')}
+${roomPrice(r, c)}
+${r.available ? `<a class="btn g" href="${esc(waLink(m, c.waRoom(r.name[L])))}">${c.bookWa}</a>` : ''}</div></article>`).join('\n')}
 </div></section>
 <section class="sec pa" aria-labelledby="info-h"><div class="wrap">
 <div class="hd"><h2 id="info-h">${c.infoH2}</h2></div>
@@ -524,7 +534,7 @@ function jsonLd(pg, m, t) {
     address: { '@type': 'PostalAddress', streetAddress: h.street, addressLocality: 'Santo Domingo', addressCountry: 'DO' },
     ...(h.checkInISO && { checkinTime: h.checkInISO }), ...(h.checkOutISO && { checkoutTime: h.checkOutISO }),
     numberOfRooms: m.rooms.length,
-    priceRange: m.minPrice === m.maxPrice ? usd(m.minPrice) : `${usd(m.minPrice)}–${m.maxPrice}`,
+    ...(m.minPrice !== null && { priceRange: priceRangeText(m) }),
     availableLanguage: ['es', 'en'],
     amenityFeature: [...SPACES.filter((s) => s.key !== 'lobby').map((s) => feature(s[L][0])), ...commonAmenities(m).map((a) => feature(cap(amenityLabel(a, L))))],
     ...(h.instagramUrl && { sameAs: [h.instagramUrl] }),
@@ -538,10 +548,10 @@ function jsonLd(pg, m, t) {
       image: abs(r.photo),
       amenityFeature: [L === 'es' ? 'Baño privado' : 'Private bathroom', ...r.amenities.map((a) => cap(amenityLabel(a, L)))].map(feature),
     })),
-    makesOffer: m.rooms.map((r) => ({
+    ...(openRooms(m).length && { makesOffer: openRooms(m).map((r) => ({
       '@type': 'Offer', url: `${pageUrl('rooms', L)}#${r.anchor}`, itemOffered: { '@id': roomId(r) },
       priceSpecification: { '@type': 'UnitPriceSpecification', price: r.price, priceCurrency: 'USD', unitCode: 'DAY' },
-    })),
+    })) }),
     potentialAction: { '@type': 'ReserveAction', target: { '@type': 'EntryPoint', urlTemplate: pageUrl('rooms', L) } },
   };
   const page = {
@@ -637,7 +647,9 @@ function llms(m) {
     const extra = r.amenities.filter((a) => !commonAmenities(m).includes(a));
     const es = [bedLabel(r.bed, 'es').toLowerCase(), guestsLabel(r.guests, 'es').toLowerCase(), sizeLabel(r), ...extra.map((a) => amenityLabel(a, 'es'))].join(', ');
     const en = [bedLabel(r.bed, 'en'), guestsLabel(r.guests, 'en').toLowerCase(), sizeLabel(r), ...extra.map((a) => amenityLabel(a, 'en'))].join(', ');
-    return `- ${r.name.es} / ${r.name.en}: ${es}; desde ${usd(r.price)}/noche · ${en}; from ${usd(r.price)}/night`;
+    return r.available
+      ? `- ${r.name.es} / ${r.name.en}: ${es}; desde ${usd(r.price)}/noche · ${en}; from ${usd(r.price)}/night`
+      : `- ${r.name.es} / ${r.name.en}: ${es}; ${COPY.es.unavailable.toLowerCase()} · ${en}; ${COPY.en.unavailable.toLowerCase()}`;
   };
   return `# ${h.name}
 
@@ -647,8 +659,7 @@ function llms(m) {
 
 - Dirección / Address: ${oneLineAddress(m)}
 - Habitaciones / Rooms: ${m.rooms.length}
-- Tarifa directa / Direct rate: desde ${usd(m.minPrice)} por noche (${m.minPrice === m.maxPrice ? usd(m.minPrice) : `${usd(m.minPrice)}–${usd(m.maxPrice)}`} según la habitación) / from ${usd(m.minPrice)} per night (${m.minPrice === m.maxPrice ? usd(m.minPrice) : `${usd(m.minPrice)}–${usd(m.maxPrice)}`} by room). Las tarifas pueden variar según la fecha / Rates can vary by date.
-${h.checkIn && h.checkOut ? `- Check-in ${h.checkIn} · Check-out ${h.checkOut}\n` : ''}- Cancelación gratuita con ${CANCELLATION_HOURS} h de anticipación / Free cancellation with ${CANCELLATION_HOURS} hours' notice
+${m.minPrice === null ? '' : `- Tarifa directa / Direct rate: desde ${usd(m.minPrice)} por noche (${m.minPrice === m.maxPrice ? usd(m.minPrice) : `${usd(m.minPrice)}–${usd(m.maxPrice)}`} según la habitación) / from ${usd(m.minPrice)} per night (${m.minPrice === m.maxPrice ? usd(m.minPrice) : `${usd(m.minPrice)}–${usd(m.maxPrice)}`} by room). Las tarifas pueden variar según la fecha / Rates can vary by date.\n`}${h.checkIn && h.checkOut ? `- Check-in ${h.checkIn} · Check-out ${h.checkOut}\n` : ''}- Cancelación gratuita con ${CANCELLATION_HOURS} h de anticipación / Free cancellation with ${CANCELLATION_HOURS} hours' notice
 - Estadía mínima / Minimum stay: ${h.minNights} ${h.minNights > 1 ? 'noches / nights' : 'noche / night'}
 - En todas las habitaciones / In every room: ${every.es} / ${every.en}
 - Espacios / Spaces: ${SPACES.map((s) => s.es[0]).join(', ')} / ${SPACES.map((s) => s.en[0]).join(', ')}
@@ -724,23 +735,36 @@ function selfCheck(outputs, m) {
     if (!html.includes(`<html lang="${pg.lang}">`)) errs.push(`${where}: <html lang> is not ${pg.lang}`);
     if (!html.includes(`<div id="root" data-lang="${pg.lang}" data-page="${pg.page}">`)) errs.push(`${where}: #root data attributes missing`);
     if (!/<script type="module"[^>]+src="\/assets\/[^"]+\.js"/.test(html)) errs.push(`${where}: app bundle script missing`);
-    // Prices: every room's HTML price(s) must equal its JSON-LD offer, and no stray amounts.
+    // Prices: every open room's HTML price(s) must equal its JSON-LD offer; a closed room (available=false)
+    // may have no Offer and no price anywhere; no stray amounts; the range covers open rooms only.
     const offerByAnchor = Object.fromEntries(offers.map((o) => [o.url.split('#')[1], o.priceSpecification?.price]));
+    const na = COPY[pg.lang].unavailable;
+    const closedIds = new Set(m.rooms.filter((r) => !r.available).map((r) => `${ORIGIN}/habitaciones#${r.anchor}`));
+    for (const o of offers) if (closedIds.has(o.itemOffered?.['@id'])) errs.push(`${where}: Offer for closed room ${o.itemOffered['@id']}`);
     for (const r of m.rooms) {
       const price = offerByAnchor[r.anchor];
-      if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) errs.push(`${where}: offer price for ${r.anchor} not a positive number`);
       const block = (html.match(new RegExp(`<article[^>]*id="${r.anchor}"[\\s\\S]*?</article>`)) || [''])[0];
       const shown = [...block.matchAll(/US\$(\d+)/g)].map((x) => Number(x[1]));
+      const row = pg.page === 'rooms' ? (html.match(new RegExp(`<tr><th scope="row"><a href="#${r.anchor}">[\\s\\S]*?</tr>`)) || [''])[0] : null;
+      if (!r.available) {
+        if (r.anchor in offerByAnchor) errs.push(`${where}: closed ${r.anchor} has an Offer`);
+        if (shown.length || !block.includes(na)) errs.push(`${where}: closed ${r.anchor} shows a price (${shown.join('/')}) or lacks "${na}"`);
+        if (row !== null && (/US\$/.test(row) || !row.includes(na))) errs.push(`${where}: closed ${r.anchor} table row shows a price`);
+        continue;
+      }
+      if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) errs.push(`${where}: offer price for ${r.anchor} not a positive number`);
       if (!shown.length || shown.some((p) => p !== price)) errs.push(`${where}: ${r.anchor} HTML price ${shown.join('/') || 'missing'} != JSON-LD ${price}`);
-      if (pg.page === 'rooms') {
-        const row = (html.match(new RegExp(`<tr><th scope="row"><a href="#${r.anchor}">[\\s\\S]*?</tr>`)) || [''])[0];
+      if (row !== null) {
         const rowPrice = Number((row.match(/US\$(\d+)/) || [])[1]);
         if (rowPrice !== price) errs.push(`${where}: ${r.anchor} table price ${rowPrice} != JSON-LD ${price}`);
       }
     }
-    const allowed = new Set([...offers.map((o) => o.priceSpecification.price), m.minPrice, m.maxPrice]);
+    if (offers.length !== openRooms(m).length) errs.push(`${where}: ${offers.length} offers for ${openRooms(m).length} open rooms`);
+    const offerPrices = offers.map((o) => o.priceSpecification.price);
+    if (offerPrices.length && (Math.min(...offerPrices) !== m.minPrice || Math.max(...offerPrices) !== m.maxPrice)) errs.push(`${where}: price range is not the open rooms' range`);
+    const allowed = new Set(offerPrices);
     for (const x of t.matchAll(/US\$(\d+)/g)) if (!allowed.has(Number(x[1]))) errs.push(`${where}: stray price US$${x[1]}`);
-    if (hotel?.priceRange !== (m.minPrice === m.maxPrice ? usd(m.minPrice) : `${usd(m.minPrice)}–${m.maxPrice}`)) errs.push(`${where}: priceRange mismatch`);
+    if (hotel?.priceRange !== (m.minPrice === null ? undefined : priceRangeText(m))) errs.push(`${where}: priceRange mismatch`);
     // Canonical + hreflang: absolute apex URLs, self-referencing, reciprocal (checked after the loop).
     const canonical = (html.match(/<link rel="canonical" href="([^"]+)"/) || [])[1];
     if (canonical !== pageUrl(pg.page, pg.lang)) errs.push(`${where}: canonical ${canonical}`);
@@ -750,7 +774,7 @@ function selfCheck(outputs, m) {
     }
     if (alts[pg.lang] !== canonical) errs.push(`${where}: hreflang ${pg.lang} is not self-referencing`);
     hreflangs[canonical] = alts;
-    const need = pg.lang === 'es' ? ['desde US$'] : ['from US$'];
+    const need = m.minPrice === null ? [] : pg.lang === 'es' ? ['desde US$'] : ['from US$'];
     for (const s of [...need, m.hotel.street, m.hotel.whatsapp, ...m.rooms.map((r) => r.name[pg.lang])]) if (!html.includes(esc(s)) && !t.includes(s)) errs.push(`${where}: missing "${s}"`);
     const desc = (html.match(/<meta name="description" content="([^"]+)"/) || [])[1] || '';
     report.push(`${where.padEnd(18)} lang=${pg.lang} h1=${h1s} jsonld=${graph.length} nodes offers=${offers.length} desc=${desc.length}ch html=${(html.length / 1024).toFixed(1)}KB`);
@@ -772,7 +796,12 @@ function selfCheck(outputs, m) {
   const sm = outputs['sitemap.xml'];
   if ((sm.match(/<loc>/g) || []).length !== PAGES.length || /www\.caonabo35|lastmod/.test(sm)) errs.push('sitemap.xml: unexpected content');
   const ll = outputs['llms.txt'];
-  for (const r of m.rooms) if (!ll.includes(`desde ${usd(r.price)}/noche`)) errs.push(`llms.txt: price for ${r.anchor} missing`);
+  for (const r of m.rooms) {
+    const line = ll.split('\n').find((l) => l.startsWith(`- ${r.name.es} / `)) || '';
+    if (r.available ? !line.includes(`desde ${usd(r.price)}/noche`) : /US\$/.test(line) || !line.includes(COPY.es.unavailable.toLowerCase())) errs.push(`llms.txt: rate line for ${r.anchor} wrong (${r.available ? 'open' : 'closed'})`);
+  }
+  const llPrices = [...ll.matchAll(/US\$(\d+)/g)].map((x) => Number(x[1]));
+  if (llPrices.some((p) => !openRooms(m).some((r) => r.price === p))) errs.push('llms.txt: price not belonging to an open room');
   for (const [re, label] of FORBIDDEN) if (re.test(ll) || re.test(sm)) errs.push(`llms.txt/sitemap: forbidden ${label}`);
   if (/\b(undefined|null|NaN)\b/.test(ll)) errs.push('llms.txt: contains undefined/null/NaN');
   return { errs, report };
@@ -835,7 +864,8 @@ async function main() {
       fs.writeFileSync(path.join(DIST, file), content);
     }
     const m = src.model;
-    console.log(`[prerender] data: ${src.label} · ${m.rooms.length} rooms · direct rates ${usd(m.minPrice)}–${usd(m.maxPrice)}`);
+    const closed = m.rooms.filter((r) => !r.available).map((r) => r.name.es);
+    console.log(`[prerender] data: ${src.label} · ${m.rooms.length} rooms${closed.length ? ` (closed, unpriced: ${closed.join(', ')})` : ''} · direct rates ${m.minPrice === null ? 'n/a' : `${usd(m.minPrice)}–${usd(m.maxPrice)}`}`);
     console.log(`[prerender] self-check passed:\n  ${report.join('\n  ')}`);
     console.log(`[prerender] wrote ${Object.keys(outputs).join(', ')}`);
     return;
