@@ -66,9 +66,10 @@ export default async function handler(req, res) {
   let supabase;
   try { supabase = serviceClient(); } catch { return res.status(500).json({ error: 'Server error' }); }
 
-  // Calendar apps subscribe with ?token=<ICAL_TOKEN or CRON_SECRET>; the admin panel uses its session.
+  // Calendar apps subscribe with ?token=<ICAL_TOKEN> (never CRON_SECRET: that URL gets shared with
+  // Airbnb/Booking/Google, and the cron secret also unlocks backups); the admin panel uses its session.
   const token = typeof req.query?.token === 'string' ? req.query.token : '';
-  const tokenOk = !!token && (safeEqual(token, process.env.ICAL_TOKEN) || safeEqual(token, process.env.CRON_SECRET));
+  const tokenOk = !!token && safeEqual(token, process.env.ICAL_TOKEN);
   if (!tokenOk && !(await isAdminToken(supabase, bearerToken(req)))) {
     return res.status(401).json({ error: 'Unauthorized' });
   }

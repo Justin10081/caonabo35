@@ -565,7 +565,7 @@ const PAGE_TITLES = {
 // initialLang / initialPage come from the prerendered page via main.jsx (contract §7);
 // without them the URL path decides, so /en works on the plain SPA build too.
 export default function App({initialLang, initialPage} = {}) {
-  const [view,setView] = useState(()=>{ try{return sessionStorage.getItem('c35_view')||"public";}catch{return "public";} });
+  const [view,setView] = useState(()=>{ try{ if(new URLSearchParams(window.location.search).has('admin')) return "admin"; return sessionStorage.getItem('c35_view')||"public";}catch{return "public";} });
   const [lang,setLang] = useState(()=> initialLang==="en"||initialLang==="es" ? initialLang : langFromPath(typeof window!=="undefined"?window.location.pathname:"/"));
   const [page] = useState(()=> initialPage==="rooms"||initialPage==="home" ? initialPage : pageFromPath(typeof window!=="undefined"?window.location.pathname:"/"));
   const [menuOpen,setMenuOpen] = useState(false);
@@ -1020,7 +1020,7 @@ export default function App({initialLang, initialPage} = {}) {
   useEffect(()=>{
     supabase.auth.getSession().then(({data:{session}})=>{
       if(session) setAdminAuth(true);
-      else if(sessionStorage.getItem('c35_view')==='admin'){sessionStorage.setItem('c35_view','public');setView("public");}
+      else if(sessionStorage.getItem('c35_view')==='admin'&&!new URLSearchParams(window.location.search).has('admin')){sessionStorage.setItem('c35_view','public');setView("public");}
     });
     const{data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>{
       setAdminAuth(!!session);

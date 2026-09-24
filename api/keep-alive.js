@@ -1,8 +1,8 @@
-import { serviceClient, isCronRequest } from './_lib/shared.js';
+import { serviceClient } from './_lib/shared.js';
 
 export default async function handler(req, res) {
-  // Vercel cron sends "Authorization: Bearer <CRON_SECRET>"; with CRON_SECRET unset nothing is accepted.
-  if (!isCronRequest(req)) return res.status(401).json({ error: 'Unauthorized' });
+  // Deliberately unauthenticated: it only selects settings.id, and refusing it when CRON_SECRET is
+  // missing would let the free-tier project pause (7 days idle takes booking and admin down).
 
   // Lightweight ping to keep the Supabase free tier from pausing
   try {
