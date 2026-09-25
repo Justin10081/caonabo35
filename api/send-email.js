@@ -12,7 +12,7 @@ const ADMIN_EMAIL    = process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL |
 const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP  || '';
 const BANK_NAME      = process.env.BANK_NAME       || 'Banco Popular';
 const BANK_ACCOUNT   = process.env.BANK_ACCOUNT    || '819272006';
-const BANK_HOLDER    = process.env.BANK_HOLDER     || 'Caonabo 35';
+const BANK_HOLDER    = process.env.BANK_HOLDER     || 'SHIH I LIU';
 const BANK_TYPE      = process.env.BANK_TYPE       || 'Cuenta de Ahorros';
 
 // ── WhatsApp notification via CallMeBot (free) ────────────────────────────
