@@ -1511,12 +1511,15 @@ export default function App() {
           </div>
         </div>
 
-        {/* Mobile tab bar */}
-        <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.ebony,zIndex:100,overflowX:"auto",borderTop:`1px solid ${C.mahogany}50`}} className="mob-tabbar">
+        {/* Mobile tab bar: every tab, icon over label so the first six (incl. Galería) fit a
+            phone screen; the rest scroll sideways. Hidden on desktop, where the sidebar is. */}
+        <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.ebony,zIndex:100,overflowX:"auto",borderTop:`1px solid ${C.mahogany}50`,display:"none"}} className="mob-tabbar">
           <div style={{display:"flex",minWidth:"max-content"}}>
-            {adminTabs.slice(0,7).map(([id,lbl])=>(
-              <button key={id} onClick={()=>setAdminTab(id)} style={{background:"none",border:"none",color:adminTab===id?C.gold:C.taupe,padding:".6rem .9rem",fontFamily:"'Lato',sans-serif",fontSize:".6rem",cursor:"pointer",whiteSpace:"nowrap"}}>{lbl}</button>
-            ))}
+            {adminTabs.map(([id,lbl])=>{ const sp=lbl.indexOf(" "); return(
+              <button key={id} onClick={()=>setAdminTab(id)} style={{background:"none",border:"none",color:adminTab===id?C.gold:C.taupe,padding:".45rem .45rem .5rem",minWidth:54,fontFamily:"'Lato',sans-serif",fontSize:".6rem",cursor:"pointer",whiteSpace:"nowrap",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                <span aria-hidden="true" style={{fontSize:"1.05rem",lineHeight:1}}>{lbl.slice(0,sp)}</span><span>{lbl.slice(sp+1)}</span>
+              </button>
+            );})}
           </div>
         </div>
 
@@ -2606,9 +2609,9 @@ export default function App() {
 
       {/* PHOTO STRIP */}
       <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",height:220}}>
-        {(galList.length?stripPhotos(galList):[null,null,null,null]).map((g,i)=>(
-          <div key={g?.id||g?.photo||i} style={{overflow:"hidden",cursor:"pointer",background:C.mahogany}} onClick={()=>document.getElementById("gallery")?.scrollIntoView({behavior:"smooth"})}>
-            {g&&<img src={g.photo} alt="" loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.05)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>}
+        {stripPhotos(galList).map((g,i)=>(
+          <div key={g.id||g.photo||i} style={{overflow:"hidden",cursor:"pointer",background:C.mahogany}} onClick={()=>document.getElementById("gallery")?.scrollIntoView({behavior:"smooth"})}>
+            <img src={g.photo} alt="" loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.05)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>
           </div>
         ))}
       </div>

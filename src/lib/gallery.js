@@ -45,27 +45,56 @@ export function mapGalleryRow(r) {
 const DEFAULT_STRIP = ['/img/livingBig.jpg', '/img/reception.jpg', '/img/corridor.jpg', '/img/amberChairs.jpg'];
 const withDefaultStrip = (list) => list.map(g => ({ ...g, tag: normalizeTag(g.tag), strip: g.strip ?? DEFAULT_STRIP.includes(g.photo) }));
 
-// The 4 photos for the strip under the hero: the ones the owner ticked, in gallery
-// order, topped up with featured and then any other photos so it's never half empty.
+// Only two kinds of photo URL are valid (the DB enforces the same rule with a
+// CHECK constraint): a photo bundled with the site, or one in our public bucket.
+const PUBLIC_PREFIX = supabase.storage.from(GALLERY_BUCKET).getPublicUrl('').data.publicUrl.replace(/\/?$/, '/');
+export const isSafePhotoUrl = (u) => typeof u === 'string' && (u.startsWith('/img/') || u.startsWith(PUBLIC_PREFIX));
+
+// The 4 photos for the strip under the hero: the ones the owner ticked, then the
+// next photos in gallery order, so the strip never has an empty column.
 export function stripPhotos(list) {
   const picked = list.filter(g => g.strip);
-  const rest = list.filter(g => !g.strip);
-  return [...picked, ...rest.filter(g => g.featured), ...rest.filter(g => !g.featured)].slice(0, STRIP_MAX);
+  return [...picked, ...list.filter(g => !g.strip)].slice(0, STRIP_MAX);
 }
 
-// Loads the gallery once on mount.
+// Last good gallery, per visitor, so a repeat visit paints the owner's current
+// photos immediately instead of the bundled ones. Purely a convenience: any
+// storage error just means we fall back to the bundled set until the DB answers.
+const CACHE_KEY = 'c35_gallery_v1';
+function readCache() {
+  try {
+    const a = JSON.parse(window.localStorage.getItem(CACHE_KEY) || 'null');
+    if (!Array.isArray(a)) return null;
+    const ok = a.filter(g => g && isSafePhotoUrl(g.photo)).map(g => ({
+      id: String(g.id || ''), photo: g.photo, path: null, label: String(g.label || ''), labelEn: String(g.labelEn || ''),
+      tag: normalizeTag(g.tag), featured: !!g.featured, strip: !!g.strip, sort: Number(g.sort) || 0,
+    }));
+    return ok.length ? ok : null;
+  } catch { return null; }
+}
+function writeCache(rows) {
+  try {
+    if (rows && rows.length) window.localStorage.setItem(CACHE_KEY, JSON.stringify(rows.map(({ id, photo, label, labelEn, tag, featured, strip, sort }) => ({ id, photo, label, labelEn, tag, featured, strip, sort }))));
+    else window.localStorage.removeItem(CACHE_KEY);
+  } catch { /* private mode / blocked storage: fine */ }
+}
+
+// Loads the gallery on mount.
 //   rows   — DB rows (for the admin), null until the first load finishes
 //   status — 'loading' | 'ok' | 'error'
-//   list   — what the public page shows: DB rows, or the bundled photos if the
-//            query failed or came back empty. Never empty after loading.
+//   list   — what the public page shows. NEVER empty: fresh DB rows; while loading
+//            (or if the DB fails) the last good list cached in this browser, else
+//            the bundled photos. A DB with zero rows also shows the bundled photos.
+//   reload — re-reads the DB; resolves true on success
 export function useGallery(bundled) {
   const [rows, setRows] = useState(null);
   const [status, setStatus] = useState('loading');
+  const [cached] = useState(readCache);
 
   const reload = useCallback(async () => {
     setStatus(s => (s === 'ok' ? s : 'loading'));
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 8000);   // a hung request must not blank the gallery
+    const timer = setTimeout(() => ctl.abort(), 8000);   // a hung request must not strand the page
     try {
       const { data, error } = await supabase
         .from(GALLERY_TABLE)
@@ -76,15 +105,18 @@ export function useGallery(bundled) {
       if (error || !Array.isArray(data)) throw error || new Error('no data');
       setRows(data.map(mapGalleryRow));
       setStatus('ok');
+      return true;
     } catch (e) {
-      console.warn('Gallery: using bundled photos —', e?.message || e);
+      console.warn('Gallery: using cached/bundled photos —', e?.message || e);
       setStatus('error');
+      return false;
     } finally {
       clearTimeout(timer);
     }
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { if (rows) writeCache(rows); }, [rows]);
 
   // A link to /#gallery (e.g. "Ver la galería en la web" in the admin) arrives
   // before React has drawn the page, so the browser's own jump misses. Re-apply
@@ -96,9 +128,9 @@ export function useGallery(bundled) {
     } catch { /* not in a browser */ }
   }, [status]);
 
-  const list = status === 'loading' && !rows
-    ? []
-    : (rows && rows.length ? rows : withDefaultStrip(bundled));
+  const list = rows && rows.length ? rows
+    : (rows === null && cached) ? cached
+    : withDefaultStrip(bundled);
 
   return { rows, setRows, status, reload, list };
 }
