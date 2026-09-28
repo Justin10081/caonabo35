@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useId, createContext, useContext } from "react";
 import { supabase } from "./lib/supabase.js";
+import GalleryManager from "./GalleryManager.jsx";
+import { useGallery, stripPhotos, GALLERY_TAGS } from "./lib/gallery.js";
 import MultiCalendar from "./MultiCalendar.jsx";
 import { todaySD, addDays, isYmd, validateStay, validateAdminStay, stayErrorText, clampMinNights, nightsBetween, MAX_ADVANCE_DAYS, MAX_NIGHTS } from "./lib/dates.js";
 import { nights, fmtMoney, quoteFor, activeRecurringSeason, nightKey } from "./lib/pricing.js";
@@ -1662,10 +1664,19 @@ export default function App({initialLang, initialPage} = {}) {
     showToast("Marcado como pagado ✓");
   }
 
-  // "Habitaciones" in the gallery = each room's current cover photo from the DB.
-  const roomGallery = roomsLoaded ? rooms.map(r=>{const c=coverPhoto(r);return c?{photo:c,label:r.name,labelEn:r.nameEn||r.name,tag:"bedroom",featured:false}:null;}).filter(Boolean) : [];
-  const galAll = [...GALLERY, ...roomGallery];
-  const galItems = galFilter==="all"?galAll:galAll.filter(g=>g.tag===galFilter);
+  // Public gallery: owner-editable rows from gallery_photos (Admin › Galería), falling back
+  // to this visitor's cached list or the bundled GALLERY while loading / if the query fails
+  // or is empty. "Habitaciones" = each room's current cover photo from the DB, appended
+  // after the owner's photos. Filter buttons only show categories that have photos, and the
+  // grid and lightbox both work on the combined list.
+  const gal = useGallery(GALLERY);
+  const galList = gal.list;
+  const galLabel = (g) => (lang==="en"&&g.labelEn) || g.label || "Caonabo 35";
+  const roomGallery = roomsLoaded ? rooms.map(r=>{const c=coverPhoto(r);return c?{photo:c,label:r.name,labelEn:r.nameEn||r.name,tag:"bedroom",featured:false}:null;}).filter(g=>g&&!gal.isBroken(g.photo)) : [];
+  const galAll = [...galList, ...roomGallery];
+  const galTags = GALLERY_TAGS.filter(([tag])=>galAll.some(g=>g.tag===tag));
+  const galFilterOn = galTags.some(([tag])=>tag===galFilter) ? galFilter : "all";
+  const galItems = galFilterOn==="all"?galAll:galAll.filter(g=>g.tag===galFilterOn);
 
   // ─── Print/export bookings ────────────────────────────────────────
   function printReport() {
@@ -1747,6 +1758,7 @@ export default function App({initialLang, initialPage} = {}) {
       ["calendar","📅","Calendario",0],
       ["precios","💲","Precios",0],
       ["rooms","🏠","Habitaciones",0],
+      ["gallery","🖼️","Galería",0],
       ["messages","💬","Mensajes",unreadCnt],
       ["finances","💰","Finanzas",0],
       ["reviews","⭐","Reseñas",0],
@@ -2183,6 +2195,9 @@ export default function App({initialLang, initialPage} = {}) {
               })}
             </div>
           </div>)}
+
+          {/* ── GALLERY (public "Galería" section) ── */}
+          {adminTab==="gallery"&&<GalleryManager gal={gal} showToast={showToast} compressToBlob={compressToBlob}/>}
 
           {/* ── MESSAGES ── */}
           {adminTab==="messages"&&(<div>
@@ -2888,7 +2903,6 @@ export default function App({initialLang, initialPage} = {}) {
   const bedLabel = (b) => BED_LABELS[b] ? BED_LABELS[b][L] : (b||"");
   const amenityLabel = (a) => AMENITY_LABELS[a] ? AMENITY_LABELS[a][L] : a;
   const photoLabel = (l) => lang==="en" ? (PHOTO_LABELS_EN[l] || String(l||"").replace(/^Foto (\d+)$/,"Photo $1")) : l;
-  const galLabel = (g) => lang==="es" ? g.label : (g.labelEn||g.label);
   const searchErr = validateStay(availDates.checkIn, availDates.checkOut, today, minNights);
   const searchValid = !searchErr;
   const datesChecked = bookedRoomIds!==null;
@@ -2994,11 +3008,11 @@ export default function App({initialLang, initialPage} = {}) {
 
       {/* PHOTO STRIP */}
       <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",height:220}}>
-        {[1,5,6,8].map(gi=>{ const g=GALLERY[gi]; return(
-          <a key={gi} href="#gallery" aria-label={`${t("Galería","Gallery")}: ${galLabel(g)}`} style={{overflow:"hidden",display:"block"}}>
-            <img src={g.photo} alt={galLabel(g)} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s",display:"block"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.05)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>
+        {stripPhotos(galList).map((g,i)=>(
+          <a key={g.id||g.photo||i} href="#gallery" aria-label={`${t("Galería","Gallery")}: ${galLabel(g)}`} style={{overflow:"hidden",display:"block",background:C.mahogany}}>
+            <img src={g.photo} alt={galLabel(g)} loading="lazy" decoding="async" onError={()=>gal.markBroken(g.photo)} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s",display:"block"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.05)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>
           </a>
-        );})}
+        ))}
       </div>
 
       {/* ROOMS */}
@@ -3109,16 +3123,16 @@ export default function App({initialLang, initialPage} = {}) {
         <div style={{maxWidth:1200,margin:"0 auto"}}>
           <SHead id="gallery-title" eyebrow={t("FOTOGRAFÍA","PHOTOGRAPHY")} title={t("Galería","Gallery")} dark/>
           <div role="group" aria-label={t("Filtrar fotos","Filter photos")} style={{display:"flex",gap:".5rem",justifyContent:"center",flexWrap:"wrap",marginBottom:"2.5rem"}}>
-            {[["all",t("Todo","All")],["outdoor",t("Exterior","Outdoor")],["living",t("Salas","Living")],["bedroom",t("Habitaciones","Rooms")],["bathroom",t("Baños","Bathrooms")],["common",t("Áreas Comunes","Common")],["detail",t("Detalles","Details")]].map(([f,l])=>(
-              <button key={f} type="button" className={`tog${galFilter===f?" act":""}`} aria-pressed={galFilter===f} onClick={()=>setGalFilter(f)}>{l}</button>
+            {[["all",t("Todo","All")],...galTags.map(([f,es,en])=>[f,t(es,en)])].map(([f,l])=>(
+              <button key={f} type="button" className={`tog${galFilterOn===f?" act":""}`} aria-pressed={galFilterOn===f} onClick={()=>setGalFilter(f)}>{l}</button>
             ))}
           </div>
           <div style={{columns:"3 240px",gap:5,lineHeight:0}}>
             {galItems.map((g,i)=>{
               const label = galLabel(g);
               return(
-                <button key={g.photo+i} type="button" className="gal-item" style={{breakInside:"avoid",marginBottom:5}} onClick={()=>setGalOpen(i)} aria-label={t(`Ampliar foto: ${label}`,`Enlarge photo: ${label}`)}>
-                  <img src={g.photo} alt={label} loading="lazy" decoding="async" style={{width:"100%",height:g.featured?300:180,objectFit:"cover",display:"block"}}/>
+                <button key={g.id||g.photo+i} type="button" className="gal-item" style={{breakInside:"avoid",marginBottom:5}} onClick={()=>setGalOpen(i)} aria-label={t(`Ampliar foto: ${label}`,`Enlarge photo: ${label}`)}>
+                  <img src={g.photo} alt={label} loading="lazy" decoding="async" onError={()=>gal.markBroken(g.photo)} style={{width:"100%",height:g.featured?300:180,objectFit:"cover",display:"block"}}/>
                   <span className="gal-cap" aria-hidden="true" style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(26,15,8,.7))",padding:".85rem .9rem",opacity:0,transition:"opacity .3s",lineHeight:1.4,textAlign:"left",display:"block"}}>
                     <span style={{color:C.parchment,fontSize:".7rem",fontFamily:"'Lato',sans-serif",letterSpacing:".1em",textTransform:"uppercase"}}>{label}</span>
                   </span>
@@ -3423,7 +3437,7 @@ export default function App({initialLang, initialPage} = {}) {
             style={{background:"rgba(26,15,8,.97)",flexDirection:"column",zIndex:3000,backdropFilter:"none",WebkitBackdropFilter:"none"}}>
             <div style={{position:"relative",maxWidth:950,width:"95%"}}>
               <div style={{position:"relative",maxHeight:"70vh",overflow:"hidden"}}>
-                <img src={g.photo} alt={label} style={{width:"100%",maxHeight:"70vh",objectFit:"contain",display:"block"}}/>
+                <img src={g.photo} alt={label} onError={()=>gal.markBroken(g.photo)} style={{width:"100%",maxHeight:"70vh",objectFit:"contain",display:"block"}}/>
                 <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(26,15,8,.75))",padding:"2rem 1.5rem 1.25rem"}}>
                   <div style={{color:C.goldLight,fontSize:"1.1rem",fontWeight:300}}>{label}</div>
                   <div style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".68rem",letterSpacing:".15em",textTransform:"uppercase",marginTop:".18rem"}}>Caonabo 35 · {galOpen+1}/{n}</div>
