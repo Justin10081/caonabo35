@@ -86,10 +86,13 @@ function writeCache(rows) {
 //            (or if the DB fails) the last good list cached in this browser, else
 //            the bundled photos. A DB with zero rows also shows the bundled photos.
 //   reload — re-reads the DB; resolves true on success
+//   markBroken(src) — call from an <img onError>: that photo is dropped from `list`
 export function useGallery(bundled) {
   const [rows, setRows] = useState(null);
   const [status, setStatus] = useState('loading');
   const [cached] = useState(readCache);
+  const [broken, setBroken] = useState(() => new Set());
+  const markBroken = useCallback((src) => setBroken(s => (s.has(src) ? s : new Set(s).add(src))), []);
 
   const reload = useCallback(async () => {
     setStatus(s => (s === 'ok' ? s : 'loading'));
@@ -128,9 +131,17 @@ export function useGallery(bundled) {
     } catch { /* not in a browser */ }
   }, [status]);
 
-  const list = rows && rows.length ? rows
+  const base = rows && rows.length ? rows
     : (rows === null && cached) ? cached
     : withDefaultStrip(bundled);
+  // A photo whose image fails to load (e.g. one the owner has since deleted but
+  // this visitor still has cached, during a slow DB or an outage) is skipped, so
+  // the grid, the strip (which then takes the next photo) and the lightbox close
+  // up around it. If every photo failed, show what we have rather than nothing.
+  const usable = (arr) => arr.filter(g => !broken.has(g.photo));
+  let list = usable(base);
+  if (!list.length) list = usable(withDefaultStrip(bundled));
+  if (!list.length) list = base;
 
-  return { rows, setRows, status, reload, list };
+  return { rows, setRows, status, reload, list, markBroken };
 }

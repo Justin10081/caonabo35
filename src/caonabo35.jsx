@@ -2611,7 +2611,7 @@ export default function App() {
       <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",height:220}}>
         {stripPhotos(galList).map((g,i)=>(
           <div key={g.id||g.photo||i} style={{overflow:"hidden",cursor:"pointer",background:C.mahogany}} onClick={()=>document.getElementById("gallery")?.scrollIntoView({behavior:"smooth"})}>
-            <img src={g.photo} alt="" loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.05)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>
+            <img src={g.photo} alt="" loading="lazy" decoding="async" onError={()=>gal.markBroken(g.photo)} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.05)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>
           </div>
         ))}
       </div>
@@ -2699,7 +2699,7 @@ export default function App() {
               const realIdx=galList.indexOf(g);
               return(
                 <div key={g.id||g.photo+i} className="gal-item" style={{breakInside:"avoid",marginBottom:5,display:"block",position:"relative"}} onClick={()=>setGalOpen(realIdx)}>
-                  <img src={g.photo} alt={galLabel(g)} loading="lazy" decoding="async" style={{width:"100%",height:g.featured?300:180,objectFit:"cover",display:"block"}}/>
+                  <img src={g.photo} alt={galLabel(g)} loading="lazy" decoding="async" onError={()=>gal.markBroken(g.photo)} style={{width:"100%",height:g.featured?300:180,objectFit:"cover",display:"block"}}/>
                   <div className="gal-cap" style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(26,15,8,.7))",padding:".85rem .9rem",opacity:0,transition:"opacity .3s"}}>
                     <span style={{color:C.parchment,fontSize:".7rem",fontFamily:"'Lato',sans-serif",letterSpacing:".1em",textTransform:"uppercase"}}>{galLabel(g)}</span>
                   </div>
@@ -2913,7 +2913,7 @@ export default function App() {
         <div style={{position:"fixed",inset:0,background:"rgba(26,15,8,.97)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={()=>setGalOpen(null)}>
           <div style={{position:"relative",maxWidth:950,width:"95%"}} onClick={e=>e.stopPropagation()}>
             <div style={{position:"relative",maxHeight:"70vh",overflow:"hidden"}}>
-              <img src={galList[galOpen].photo} alt={galLabel(galList[galOpen])} style={{width:"100%",maxHeight:"70vh",objectFit:"contain",display:"block"}}/>
+              <img src={galList[galOpen].photo} alt={galLabel(galList[galOpen])} onError={()=>gal.markBroken(galList[galOpen].photo)} style={{width:"100%",maxHeight:"70vh",objectFit:"contain",display:"block"}}/>
               <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(26,15,8,.75))",padding:"2rem 1.5rem 1.25rem"}}>
                 <div style={{color:C.goldLight,fontSize:"1.1rem",fontWeight:300}}>{galLabel(galList[galOpen])}</div>
                 <div style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".68rem",letterSpacing:".15em",textTransform:"uppercase",marginTop:".18rem"}}>Caonabo 35 · {galOpen+1}/{galList.length}</div>

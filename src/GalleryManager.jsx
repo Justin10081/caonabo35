@@ -57,12 +57,11 @@ export default function GalleryManager({ gal, showToast, compressToBlob }) {
   const updDrafts = (fn) => { draftsRef.current = fn(draftsRef.current); setDraftsState(draftsRef.current); };
   const setDraft = (id, k, v) => updDrafts(d => ({ ...d, [id]: { ...d[id], [k]: v } }));
   const dropDraft = (id) => updDrafts(d => { const n = { ...d }; delete n[id]; return n; });
-  // After a save (ok or not), forget only the fields that still hold exactly what
-  // was sent. Anything typed while the save was in flight stays as a draft.
-  const settleDraft = (id, sent) => updDrafts(d => {
+  // Forget the draft fields that `match` says are no longer needed; keep the rest.
+  const clearDraftFields = (id, match) => updDrafts(d => {
     if (!d[id]) return d;
     const cur = { ...d[id] };
-    for (const k of Object.keys(sent)) if (cur[k] !== undefined && cur[k].trim() === sent[k]) delete cur[k];
+    for (const k of Object.keys(cur)) if (match(k, cur[k])) delete cur[k];
     const n = { ...d };
     if (Object.keys(cur).length) n[id] = cur; else delete n[id];
     return n;
@@ -71,7 +70,7 @@ export default function GalleryManager({ gal, showToast, compressToBlob }) {
   const [fresh, setFresh] = useState(() => new Set()); // ids uploaded this session → "NUEVA" badge
   const [report, setReport] = useState(null);           // last upload's failures, until dismissed
 
-  const fail = (msg, error) => { showToast("❌ " + msg + (error?.message ? ": " + error.message : "")); };
+  const fail = (msg, error, hint = "") => { showToast("❌ " + msg + (error?.message ? ": " + error.message : "") + hint); };
 
   // The DB didn't match what the screen showed (another tab/device changed it):
   // reload the real list and say so, instead of guessing.
@@ -90,11 +89,11 @@ export default function GalleryManager({ gal, showToast, compressToBlob }) {
   }
 
   // ── single-field edits ───────────────────────────────────────────────
-  function savePatch(g, dbPatch, uiPatch, okMsg, { lock = true, msg = "Guardando…" } = {}) {
+  function savePatch(g, dbPatch, uiPatch, okMsg, { lock = true, msg = "Guardando…", failMsg = "No se pudo guardar", failHint = "" } = {}) {
     return run(msg, lock, async () => {
       // .select() so a write that matched nothing (row deleted elsewhere) is caught
       const { data, error } = await supabase.from(GALLERY_TABLE).update(dbPatch).eq("id", g.id).select("id");
-      if (error) { fail("No se pudo guardar", error); return false; }
+      if (error) { fail(failMsg, error, failHint); return false; }
       if (!data || data.length !== 1) { await refreshAfterMismatch("No se guardó: esa foto ya no está en la galería (¿se borró desde otra pestaña?)."); return false; }
       patchRows(arr => arr.map(x => x.id === g.id ? { ...x, ...uiPatch } : x));
       if (okMsg) showToast(okMsg);
@@ -104,6 +103,10 @@ export default function GalleryManager({ gal, showToast, compressToBlob }) {
 
   // One caption save per photo at a time. A blur that arrives while one is in
   // flight queues exactly one follow-up, which re-reads the latest text.
+  //  - Save OK: clear only the fields whose draft is exactly (untrimmed) what was
+  //    sent, so anything typed meanwhile, even a trailing space, is left alone.
+  //  - Save FAILED: keep his text (the "Guardar título" retry button stays) and
+  //    drop the queued follow-up, so nothing is sent from a stale value.
   const captionJobs = useRef(new Map());
   async function saveCaption(id) {
     const job = captionJobs.current.get(id);
@@ -116,11 +119,16 @@ export default function GalleryManager({ gal, showToast, compressToBlob }) {
         const row = (rowsRef.current || []).find(x => x.id === id);
         const d = draftsRef.current[id];
         if (!row || !d) break;
-        const label = (d.label ?? row.label).trim(), labelEn = (d.labelEn ?? row.labelEn).trim();
-        if (label !== row.label || labelEn !== row.labelEn) {
-          await savePatch(row, { label, label_en: labelEn }, { label, labelEn }, "Título guardado ✓", { lock: false, msg: "Guardando título…" });
+        const sent = { label: (d.label ?? row.label).trim(), labelEn: (d.labelEn ?? row.labelEn).trim() };
+        if (sent.label === row.label && sent.labelEn === row.labelEn) {
+          // nothing to save and no request in flight: tidy away drafts that match once trimmed
+          clearDraftFields(id, (k, v) => v.trim() === row[k]);
+          continue;
         }
-        settleDraft(id, { label, labelEn });
+        const ok = await savePatch(row, { label: sent.label, label_en: sent.labelEn }, sent, "Título guardado ✓",
+          { lock: false, msg: "Guardando título…", failMsg: "No se guardó el título", failHint: ". Tu texto sigue ahí: toca «Guardar título» para reintentar." });
+        if (!ok) { me.again = false; break; }
+        clearDraftFields(id, (k, v) => v === sent[k]);
       } while (me.again);
     } finally {
       captionJobs.current.delete(id);
