@@ -368,7 +368,7 @@ a.btn-gold,a.btn-out{text-decoration:none}
 .mob-only{display:none}
 .mtabs{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;scroll-snap-type:x proximity}
 .mtabs::-webkit-scrollbar{display:none}
-.mtab{flex:0 0 auto;min-width:64px;min-height:56px;padding:.35rem .55rem;background:none;border:none;border-top:2px solid transparent;color:#B8A898;font-family:'Lato',sans-serif;font-size:.6rem;letter-spacing:.03em;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.15rem;white-space:nowrap;scroll-snap-align:start}
+.mtab{flex:0 0 auto;min-width:54px;min-height:56px;padding:.35rem .4rem;background:none;border:none;border-top:2px solid transparent;color:#B8A898;font-family:'Lato',sans-serif;font-size:.6rem;letter-spacing:.03em;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.15rem;white-space:nowrap;scroll-snap-align:start}
 .mtab .ic{font-size:1.05rem;line-height:1}
 .mtab.act{color:#E8C97A;border-top-color:#C4973A;background:rgba(196,151,58,.1)}
 .mtab-fade{position:absolute;top:0;right:0;bottom:0;width:28px;pointer-events:none;background:linear-gradient(90deg,rgba(42,31,22,0),#2A1F16)}
