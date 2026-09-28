@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
+import GalleryManager from "./GalleryManager.jsx";
+import { useGallery, stripPhotos, GALLERY_TAGS } from "./lib/gallery.js";
 import MultiCalendar from "./MultiCalendar.jsx";
 
 const I = {
@@ -1384,7 +1386,15 @@ export default function App() {
     showToast("Marcado como pagado ✓");
   }
 
-  const galItems = galFilter==="all"?GALLERY:GALLERY.filter(g=>g.tag===galFilter);
+  // Public gallery: owner-editable rows from gallery_photos (Admin › Galería), falling
+  // back to the bundled GALLERY if the query fails or is empty. Filters only show
+  // categories that actually have photos, so no button ever opens an empty grid.
+  const gal = useGallery(GALLERY);
+  const galList = gal.list;
+  const galLabel = (g) => (lang==="en"&&g.labelEn) || g.label || "Caonabo 35";
+  const galTags = GALLERY_TAGS.filter(([tag])=>galList.some(g=>g.tag===tag));
+  const galFilterOn = galTags.some(([tag])=>tag===galFilter) ? galFilter : "all";
+  const galItems = galFilterOn==="all"?galList:galList.filter(g=>g.tag===galFilterOn);
 
   // ─── Print/export bookings ────────────────────────────────────────
   function printReport() {
@@ -1470,6 +1480,7 @@ export default function App() {
       ["calendar","📅 Calendario"],
       ["precios","💲 Precios"],
       ["rooms","🏠 Habitaciones"],
+      ["gallery","🖼️ Galería"],
       ["messages",`💬 Mensajes${unreadCnt>0?` (${unreadCnt})`:""}`],
       ["finances","💰 Finanzas"],
       ["reviews","⭐ Reseñas"],
@@ -1503,7 +1514,7 @@ export default function App() {
         {/* Mobile tab bar */}
         <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.ebony,zIndex:100,overflowX:"auto",borderTop:`1px solid ${C.mahogany}50`}} className="mob-tabbar">
           <div style={{display:"flex",minWidth:"max-content"}}>
-            {adminTabs.slice(0,6).map(([id,lbl])=>(
+            {adminTabs.slice(0,7).map(([id,lbl])=>(
               <button key={id} onClick={()=>setAdminTab(id)} style={{background:"none",border:"none",color:adminTab===id?C.gold:C.taupe,padding:".6rem .9rem",fontFamily:"'Lato',sans-serif",fontSize:".6rem",cursor:"pointer",whiteSpace:"nowrap"}}>{lbl}</button>
             ))}
           </div>
@@ -1841,6 +1852,9 @@ export default function App() {
               })}
             </div>
           </div>)}
+
+          {/* ── GALLERY (public "Galería" section) ── */}
+          {adminTab==="gallery"&&<GalleryManager gal={gal} showToast={showToast} compressToBlob={compressToBlob}/>}
 
           {/* ── MESSAGES ── */}
           {adminTab==="messages"&&(<div>
@@ -2592,9 +2606,9 @@ export default function App() {
 
       {/* PHOTO STRIP */}
       <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",height:220}}>
-        {[I.livingBig,I.reception,I.corridor,I.amberChairs].map((src,i)=>(
-          <div key={i} style={{overflow:"hidden",cursor:"pointer"}} onClick={()=>document.getElementById("gallery")?.scrollIntoView({behavior:"smooth"})}>
-            <img src={src} alt="" loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.05)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>
+        {(galList.length?stripPhotos(galList):[null,null,null,null]).map((g,i)=>(
+          <div key={g?.id||g?.photo||i} style={{overflow:"hidden",cursor:"pointer",background:C.mahogany}} onClick={()=>document.getElementById("gallery")?.scrollIntoView({behavior:"smooth"})}>
+            {g&&<img src={g.photo} alt="" loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform .5s"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.05)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>}
           </div>
         ))}
       </div>
@@ -2673,18 +2687,18 @@ export default function App() {
         <div style={{maxWidth:1200,margin:"0 auto"}}>
           <SHead eyebrow={t("FOTOGRAFÍA","PHOTOGRAPHY")} title={t("Galería","Gallery")} dark/>
           <div style={{display:"flex",gap:".5rem",justifyContent:"center",flexWrap:"wrap",marginBottom:"2.5rem"}}>
-            {[["all",t("Todo","All")],["outdoor",t("Exterior","Outdoor")],["living",t("Salas","Living")],["bedroom",t("Habitaciones","Rooms")],["bathroom","Baños"],["common",t("Áreas Comunes","Common")],["detail",t("Detalles","Details")]].map(([f,l])=>(
-              <button key={f} className={`tog${galFilter===f?" act":""}`} onClick={()=>setGalFilter(f)}>{l}</button>
+            {[["all",t("Todo","All")],...galTags.map(([f,es,en])=>[f,t(es,en)])].map(([f,l])=>(
+              <button key={f} className={`tog${galFilterOn===f?" act":""}`} onClick={()=>setGalFilter(f)}>{l}</button>
             ))}
           </div>
           <div style={{columns:"3 240px",gap:5,lineHeight:0}}>
             {galItems.map((g,i)=>{
-              const realIdx=GALLERY.indexOf(g);
+              const realIdx=galList.indexOf(g);
               return(
-                <div key={i} className="gal-item" style={{breakInside:"avoid",marginBottom:5,display:"block",position:"relative"}} onClick={()=>setGalOpen(realIdx)}>
-                  <img src={g.photo} alt={g.label} loading="lazy" decoding="async" style={{width:"100%",height:g.featured?300:180,objectFit:"cover",display:"block"}}/>
+                <div key={g.id||g.photo+i} className="gal-item" style={{breakInside:"avoid",marginBottom:5,display:"block",position:"relative"}} onClick={()=>setGalOpen(realIdx)}>
+                  <img src={g.photo} alt={galLabel(g)} loading="lazy" decoding="async" style={{width:"100%",height:g.featured?300:180,objectFit:"cover",display:"block"}}/>
                   <div className="gal-cap" style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(26,15,8,.7))",padding:".85rem .9rem",opacity:0,transition:"opacity .3s"}}>
-                    <span style={{color:C.parchment,fontSize:".7rem",fontFamily:"'Lato',sans-serif",letterSpacing:".1em",textTransform:"uppercase"}}>{g.label}</span>
+                    <span style={{color:C.parchment,fontSize:".7rem",fontFamily:"'Lato',sans-serif",letterSpacing:".1em",textTransform:"uppercase"}}>{galLabel(g)}</span>
                   </div>
                 </div>
               );
@@ -2892,22 +2906,22 @@ export default function App() {
       })()}
 
       {/* Gallery lightbox */}
-      {galOpen!==null&&(
+      {galOpen!==null&&galList[galOpen]&&(
         <div style={{position:"fixed",inset:0,background:"rgba(26,15,8,.97)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={()=>setGalOpen(null)}>
           <div style={{position:"relative",maxWidth:950,width:"95%"}} onClick={e=>e.stopPropagation()}>
             <div style={{position:"relative",maxHeight:"70vh",overflow:"hidden"}}>
-              <img src={GALLERY[galOpen]?.photo} alt={GALLERY[galOpen]?.label} style={{width:"100%",maxHeight:"70vh",objectFit:"contain",display:"block"}}/>
+              <img src={galList[galOpen].photo} alt={galLabel(galList[galOpen])} style={{width:"100%",maxHeight:"70vh",objectFit:"contain",display:"block"}}/>
               <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(26,15,8,.75))",padding:"2rem 1.5rem 1.25rem"}}>
-                <div style={{color:C.goldLight,fontSize:"1.1rem",fontWeight:300}}>{GALLERY[galOpen]?.label}</div>
-                <div style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".68rem",letterSpacing:".15em",textTransform:"uppercase",marginTop:".18rem"}}>Caonabo 35 · {galOpen+1}/{GALLERY.length}</div>
+                <div style={{color:C.goldLight,fontSize:"1.1rem",fontWeight:300}}>{galLabel(galList[galOpen])}</div>
+                <div style={{color:C.taupe,fontFamily:"'Lato',sans-serif",fontSize:".68rem",letterSpacing:".15em",textTransform:"uppercase",marginTop:".18rem"}}>Caonabo 35 · {galOpen+1}/{galList.length}</div>
               </div>
             </div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:".85rem"}}>
-              <button className="btn-out" style={{padding:".55rem 1.3rem"}} onClick={()=>setGalOpen((galOpen-1+GALLERY.length)%GALLERY.length)}>← Anterior</button>
+              <button className="btn-out" style={{padding:".55rem 1.3rem"}} onClick={()=>setGalOpen((galOpen-1+galList.length)%galList.length)}>← Anterior</button>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"center",maxWidth:300}}>
-                {GALLERY.map((_,i)=><div key={i} onClick={()=>setGalOpen(i)} style={{width:6,height:6,borderRadius:"50%",background:i===galOpen?C.gold:C.mahogany,cursor:"pointer"}}/>)}
+                {galList.map((_,i)=><div key={i} onClick={()=>setGalOpen(i)} style={{width:6,height:6,borderRadius:"50%",background:i===galOpen?C.gold:C.mahogany,cursor:"pointer"}}/>)}
               </div>
-              <button className="btn-out" style={{padding:".55rem 1.3rem"}} onClick={()=>setGalOpen((galOpen+1)%GALLERY.length)}>Siguiente →</button>
+              <button className="btn-out" style={{padding:".55rem 1.3rem"}} onClick={()=>setGalOpen((galOpen+1)%galList.length)}>Siguiente →</button>
             </div>
           </div>
           <button onClick={()=>setGalOpen(null)} style={{position:"fixed",top:"1rem",right:"1rem",background:"rgba(42,31,22,.7)",border:`1px solid ${C.mahogany}`,color:C.taupe,fontSize:"1.5rem",cursor:"pointer",width:40,height:40,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:"50%"}}>×</button>
