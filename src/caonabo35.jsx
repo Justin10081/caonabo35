@@ -115,6 +115,7 @@ const SETTINGS_INIT = {
   phone:"+1 (809) 603-3038",whatsapp:"18096033038",email:"liu.luis@me.com",
   checkIn:"3:00 PM",checkOut:"12:00 PM",instagram:"@caonabo35",
   heroSubtitle:"Diseño contemporáneo. Hospitalidad dominicana. Siete habitaciones únicas con alma.",
+  heroImage:"",
   minNights:1,taxRate:18,currency:"USD",
 };
 
@@ -682,6 +683,7 @@ export default function App({initialLang, initialPage} = {}) {
   const [editSettings,setEditSettings] = useState(false);
   const [settDraft,setSettDraft] = useState(SETTINGS_INIT);
   const [settErr,setSettErr] = useState("");
+  const [heroUploading,setHeroUploading] = useState(false);
   const [addMsgModal,setAddMsgModal] = useState(false);
   const [newMsg,setNewMsg] = useState({guest:"",email:"",phone:"",message:""});
   const [editReview,setEditReview] = useState(null);
@@ -920,6 +922,7 @@ export default function App({initialLang, initialPage} = {}) {
       checkOut: data.check_out_time || SETTINGS_INIT.checkOut,
       instagram: data.instagram || SETTINGS_INIT.instagram,
       heroSubtitle: data.hero_subtitle || SETTINGS_INIT.heroSubtitle,
+      heroImage: data.hero_image || SETTINGS_INIT.heroImage,
       minNights: clampMinNights(data.min_nights ?? SETTINGS_INIT.minNights),
       taxRate: data.tax_rate != null && Number.isFinite(Number(data.tax_rate)) ? Number(data.tax_rate) : SETTINGS_INIT.taxRate,   // a stored 0 stays 0
       currency: SETTINGS_INIT.currency,
@@ -1624,7 +1627,7 @@ export default function App({initialLang, initialPage} = {}) {
     const minN = clampMinNights(settDraft.minNights);
     const next = {...settDraft, whatsapp, taxRate, minNights:minN};
     setSaving(true);
-    const {error} = await supabase.from("settings").update({hotel_name:next.propName,address:next.address,phone:next.phone,whatsapp,email:next.email,instagram:next.instagram,hero_subtitle:next.heroSubtitle,check_in_time:next.checkIn,check_out_time:next.checkOut,min_nights:minN,tax_rate:taxRate}).eq("id",1);
+    const {error} = await supabase.from("settings").update({hotel_name:next.propName,address:next.address,phone:next.phone,whatsapp,email:next.email,instagram:next.instagram,hero_subtitle:next.heroSubtitle,hero_image:next.heroImage||null,check_in_time:next.checkIn,check_out_time:next.checkOut,min_nights:minN,tax_rate:taxRate}).eq("id",1);
     setSaving(false);
     if(error){ setSettErr("Error al guardar: "+error.message); return; }
     setSettings(next); setEditSettings(false); setSettErr("");
@@ -2869,6 +2872,36 @@ export default function App({initialLang, initialPage} = {}) {
               <div style={{marginBottom:".85rem"}}><FL htmlFor="st-min">Noches mínimas por reserva (web)</FL><Inp id="st-min" type="number" min="1" max={MAX_NIGHTS} value={settDraft.minNights??1} onChange={e=>setSettDraft({...settDraft,minNights:e.target.value})}/></div>
               <div style={{marginBottom:".85rem"}}><FL>Dirección</FL><textarea value={settDraft.address} onChange={e=>setSettDraft({...settDraft,address:e.target.value})} style={{width:"100%",padding:".7rem 1rem",border:`1px solid ${C.sand}`,fontFamily:"'Lato',sans-serif",fontSize:".88rem",background:C.smoke,height:65,resize:"vertical",outline:"none",color:C.ebony}}/></div>
               <div style={{marginBottom:"1.25rem"}}><FL>Impuesto (%)</FL><Inp type="number" value={settDraft.taxRate??0} onChange={e=>setSettDraft({...settDraft,taxRate:e.target.value===""?"":Number(e.target.value)})}/></div>
+              <div style={{marginBottom:"1.25rem"}}>
+                <FL>Foto de Portada</FL>
+                <div style={{display:"flex",gap:".8rem",alignItems:"center"}}>
+                  <img src={settDraft.heroImage||I.terrace} alt="" style={{width:132,height:74,objectFit:"cover",border:`1px solid ${C.sand}`,flexShrink:0}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <input type="file" accept="image/*" disabled={heroUploading} style={{fontFamily:"'Lato',sans-serif",fontSize:".78rem",width:"100%"}} onChange={async e=>{
+                      const file=e.target.files&&e.target.files[0]; if(!file){return;}
+                      if(!file.type.startsWith("image/")){ setSettErr("Ese archivo no es una imagen."); e.target.value=""; return; }
+                      setHeroUploading(true); setSettErr("");
+                      try{
+                        const blob = await compressToBlob(file, 2200, 1400, 0.82);
+                        if(blob.size > 4.5*1024*1024){ setSettErr("La foto es demasiado grande."); return; }
+                        const path = `site/hero-${Date.now()}.jpg`;
+                        const {error:upErr} = await supabase.storage.from(PHOTO_BUCKET).upload(path, blob, {contentType:'image/jpeg', cacheControl:'31536000', upsert:false});
+                        if(upErr){ setSettErr("Error al subir: "+upErr.message); return; }
+                        const {data:pub} = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
+                        setSettDraft(d=>({...d, heroImage:pub.publicUrl}));
+                        showToast("Foto lista ✓ pulse GUARDAR");
+                      }catch(err){ setSettErr("Error con la foto: "+(err&&err.message?err.message:err)); }
+                      finally{ setHeroUploading(false); e.target.value=""; }
+                    }}/>
+                    <div style={{fontFamily:"'Lato',sans-serif",fontSize:".72rem",color:C.taupe,marginTop:".35rem"}}>
+                      {heroUploading?"Subiendo…":"Horizontal, mínimo 1600px de ancho. Se guarda al pulsar GUARDAR."}
+                    </div>
+                    {settDraft.heroImage&&!heroUploading&&(
+                      <span style={{fontFamily:"'Lato',sans-serif",fontSize:".72rem",color:C.gold,cursor:"pointer",textDecoration:"underline"}} onClick={()=>setSettDraft(d=>({...d,heroImage:""}))}>Restaurar foto original</span>
+                    )}
+                  </div>
+                </div>
+              </div>
               <button className="btn-gold" style={{width:"100%"}} disabled={saving} onClick={saveSettings}>{saving?"GUARDANDO…":"GUARDAR"}</button>
             </div>
           </ModalBox>
@@ -2980,7 +3013,7 @@ export default function App({initialLang, initialPage} = {}) {
       <main id="main" tabIndex={-1} style={{outline:"none"}}>
       {/* HERO */}
       <section aria-labelledby="hero-title" style={{position:"relative",height:"100vh",minHeight:550,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}>
-        <img src={I.terrace} alt={t("Terraza de Caonabo 35 al anochecer","Caonabo 35 terrace at dusk")} fetchpriority="high" decoding="async" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
+        <img src={settings.heroImage||I.terrace} alt={t("Terraza de Caonabo 35 al anochecer","Caonabo 35 terrace at dusk")} onError={e=>{if(e.currentTarget.src!==I.terrace)e.currentTarget.src=I.terrace;}} fetchpriority="high" decoding="async" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
         <div style={{position:"absolute",inset:0,background:"linear-gradient(160deg,rgba(26,15,8,.78),rgba(42,31,22,.5) 50%,rgba(26,15,8,.8))"}}/>
         <div style={{position:"relative",textAlign:"center",padding:"2rem 1rem"}} className="fadein">
           <p style={{color:C.gold,fontSize:".68rem",letterSpacing:".38em",fontFamily:"'Lato',sans-serif",textTransform:"uppercase",marginBottom:"1.4rem"}}>{t("Av. Caonabo #35, 2do Piso · Santo Domingo","Av. Caonabo #35, 2nd Floor · Santo Domingo")}</p>

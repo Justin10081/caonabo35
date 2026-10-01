@@ -68,7 +68,9 @@ create table if not exists settings (
   check_in_time  text default '15:00',
   check_out_time text default '12:00',
   min_nights  int default 1,
-  tax_rate    numeric(5,2) default 18
+  tax_rate    numeric(5,2) default 18,
+  hero_subtitle text,
+  hero_image  text          -- public URL in the 'site' storage bucket; null = bundled default photo
 );
 
 -- Insert default settings row
@@ -92,3 +94,9 @@ create policy "Service role full access"    on messages for all using (auth.role
 -- Settings: service_role only
 alter table settings enable row level security;
 create policy "Service role full access"    on settings for all using (auth.role() = 'service_role');
+
+-- ─── Site images (added 2026-10-01) ──────────────────────────────────────────
+-- The owner can swap the home-page hero photo from Admin → Configuración.
+-- Bucket is public-read; only an authenticated admin session can write.
+-- insert into storage.buckets (id, name, public) values ('site','site',true) on conflict do nothing;
+-- policies: "site public read" (select), "site auth insert|update|delete" (authenticated)
