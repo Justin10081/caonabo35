@@ -1,4 +1,4 @@
-import { serviceClient, sendEmail, isCronRequest } from './_lib/shared.js';
+import { serviceClient, sendEmail, isCronRequest, adminRecipients, warnRejected } from './_lib/shared.js';
 import { runGuestEmails } from './guest-emails.js';
 import { runSync } from './sync-calendars.js';
 
@@ -42,11 +42,15 @@ export default async function handler(req, res) {
   } else {
     const csv = bookingsCsv(bookings);
     const today = new Date().toISOString().slice(0, 10);
-    const adminEmail = process.env.ADMIN_EMAIL || 'caonabo35@gmail.com';
+    // This attachment is every guest's name, email, phone and cédula. It goes to the
+    // business or it does not go at all — never to whatever ADMIN_EMAIL happens to say.
+    const { allowed, rejected } = adminRecipients();
+    warnRejected('daily-backup', rejected);
     try {
+      if (!allowed.length) throw new Error('no business recipient configured; refusing to send guest data');
       await sendEmail({
         from: process.env.FROM_EMAIL || 'reservas@caonabo35.com',
-        to: adminEmail,
+        to: allowed,
         subject: `📊 Backup Caonabo 35 — ${today} (${bookings.length} reservas)`,
         html: `<p>Backup diario automático de Caonabo 35.</p><p><strong>${bookings.length} reservas</strong> al ${today}.</p><p>El archivo CSV está adjunto.</p>`,
         attachments: [{

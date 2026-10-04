@@ -1,14 +1,17 @@
 import {
   serviceClient, sendEmail, esc, oneLine, safeEqual, bearerToken, isAdminToken,
   parseId, UUID_RE, loadRoom, roomName, sendPush,
+  adminRecipients, replyToAddress, warnRejected,
 } from './_lib/shared.js';
 
 // esc() (in _lib/shared.js) wraps every value interpolated into an email template: guest
 // names and notes are guest-supplied and must not inject markup into mail from the hotel domain.
 
 const FROM_EMAIL     = process.env.FROM_EMAIL     || 'Caonabo 35 <onboarding@resend.dev>';
-const REPLY_TO       = process.env.REPLY_TO       || process.env.ADMIN_EMAIL || '';
-const ADMIN_EMAIL    = process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL || 'admin@caonabo35.com';
+// Both were previously whatever the environment said, so a non-business address in
+// ADMIN_EMAIL received every new booking AND became the reply-to on mail sent to
+// guests. Resolved through the allowlist in _lib/shared.js now.
+const REPLY_TO       = replyToAddress() || '';
 const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP  || '';
 const BANK_NAME      = process.env.BANK_NAME       || 'Banco Popular';
 const BANK_ACCOUNT   = process.env.BANK_ACCOUNT    || '819272006';
@@ -181,9 +184,13 @@ export default async function handler(req, res) {
         `${plain.guest} · ${plain.checkIn} → ${plain.checkOut} · $${booking.total}\nTel: ${plain.phone}`,
         { tags: ['hotel', 'bell'] }
       );
-      await sendEmail({
+      // WhatsApp and push above already reached the owner, so when the configured
+      // address is not ours we skip this email rather than mail a guest's details out.
+      const { allowed: adminTo, rejected: adminRejected } = adminRecipients();
+      warnRejected('send-email/admin_notification', adminRejected);
+      if (adminTo.length) await sendEmail({
         from: FROM_EMAIL,
-        to: ADMIN_EMAIL,
+        to: adminTo,
         subject: `🔔 Nueva reserva – ${room.name} (${booking.checkIn} → ${booking.checkOut})`,
         html: `
           <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;">

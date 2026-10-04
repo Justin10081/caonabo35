@@ -27,6 +27,53 @@ export async function sendEmail(payload, options) {
   return result.data;
 }
 
+// ── Who inside the business may receive guest data ────────────────────────────
+// On 2026-10-04 an address outside the business was sitting in ADMIN_EMAIL. It got the
+// daily backup — every guest's name, email, phone and cédula — an alert for each new
+// booking, and it was the reply-to on mail sent to guests. The wrong value was the
+// trigger; the defect was that the code mailed guest data to whatever that variable
+// happened to say. It is no longer trusted: an address belongs to the business or it
+// receives nothing. Fail closed — a bad value costs the owners their backup email
+// (loud, fixable in a minute) instead of leaking a guest's details (silent, permanent).
+// Adding an internal recipient is a code change, on purpose.
+const OWNED_DOMAINS   = ['caonabo35.com'];
+const OWNED_ADDRESSES = ['caonabo35@gmail.com']; // owners' mailbox, predates the domain
+const EMAIL_SHAPE     = /^[^\s@,;]+@[^\s@,;]+\.[a-z]{2,}$/i;
+
+function isOwnedAddress(addr) {
+  if (!EMAIL_SHAPE.test(addr)) return false;
+  if (OWNED_ADDRESSES.includes(addr)) return true;
+  return OWNED_DOMAINS.includes(addr.slice(addr.lastIndexOf('@') + 1));
+}
+
+// Splits ADMIN_EMAIL into what we may send to and what we must not. `rejected` is
+// returned rather than dropped so a stranger in the config is noisy, not invisible.
+export function adminRecipients(raw = process.env.ADMIN_EMAIL) {
+  const allowed = [], rejected = [];
+  for (const a of String(raw || '').split(/[,;\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean)) {
+    (isOwnedAddress(a) ? allowed : rejected).push(a);
+  }
+  return { allowed: [...new Set(allowed)], rejected: [...new Set(rejected)] };
+}
+
+// Reply-to on mail sent to GUESTS. An outside address here means a guest hitting reply
+// sends their own details to that stranger, so an unowned value yields undefined and
+// replies fall back to the From address, which we control.
+export function replyToAddress() {
+  const explicit = String(process.env.REPLY_TO || '').split(/[,;\s]+/)
+    .map(s => s.trim().toLowerCase()).filter(Boolean).find(isOwnedAddress);
+  return explicit || adminRecipients().allowed[0];
+}
+
+export function warnRejected(where, rejected) {
+  if (rejected && rejected.length) {
+    console.error(
+      `[${where}] REFUSED to send guest data to non-business address(es): ${rejected.join(', ')} — ` +
+      `fix ADMIN_EMAIL in the Vercel project settings, or add the address to OWNED_* in api/_lib/shared.js if it really is ours.`
+    );
+  }
+}
+
 export function esc(v) {
   return String(v ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
