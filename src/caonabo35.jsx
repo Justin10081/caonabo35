@@ -597,6 +597,8 @@ export default function App({initialLang, initialPage} = {}) {
   const [channelFeeds,setChannelFeeds] = useState([]);               // configured channel_calendars rows
   const [feedForm,setFeedForm] = useState({room_id:"",source:"airbnb",ics_url:"",label:""});
   const [syncing,setSyncing] = useState(false);
+  const [icalLinks,setIcalLinks] = useState(null);      // {configured, all, rooms:[{room,label,url}]} from /api/export-ical?links=1
+  const [icalLinksLoading,setIcalLinksLoading] = useState(false);
   const [emailsOn,setEmailsOn] = useState(false);   // master switch for automated guest emails (off until owner enables)
   const [toast,setToast] = useState("");
 
@@ -822,6 +824,22 @@ export default function App({initialLang, initialPage} = {}) {
       const {data:{session}} = await supabase.auth.getSession();
       return session?.access_token ? {...extra,Authorization:`Bearer ${session.access_token}`} : {...extra};
     }catch{ return {...extra}; }
+  }
+  // Subscription links the owner pastes into Airbnb / Booking.com ("Importar calendario").
+  async function loadIcalLinks(){
+    setIcalLinksLoading(true);
+    try{
+      const headers = await authHeaders();
+      if(!headers.Authorization){ showToast("❌ Sesión expirada — vuelve a entrar"); return; }
+      const res = await fetch('/api/export-ical?links=1',{headers});
+      if(!res.ok){ showToast("❌ No se pudieron cargar los enlaces"); return; }
+      setIcalLinks(await res.json());
+    }catch{ showToast("❌ No se pudieron cargar los enlaces"); }
+    finally{ setIcalLinksLoading(false); }
+  }
+  async function copyText(text){
+    try{ await navigator.clipboard.writeText(text); showToast("Enlace copiado ✓"); }
+    catch{ window.prompt("Copia este enlace:", text); }
   }
   async function sendGuestEmails(){
     try{
@@ -2477,6 +2495,28 @@ export default function App({initialLang, initialPage} = {}) {
                   <div style={{gridColumn:"1/-1"}}><FL>Enlace iCal (.ics)</FL><Inp value={feedForm.ics_url} onChange={e=>setFeedForm(p=>({...p,ics_url:e.target.value}))} placeholder="https://www.airbnb.com/calendar/ical/....ics"/></div>
                 </div>
                 <button className="btn-gold" style={{marginTop:".7rem"}} onClick={addFeed}>+ Añadir calendario</button>
+
+                {/* Outbound: links Airbnb / Booking.com subscribe to, so they see this site's bookings */}
+                <div style={{marginTop:"1.6rem",paddingTop:"1.2rem",borderTop:`1px solid ${C.sand}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:".5rem",marginBottom:".35rem"}}>
+                    <p style={{fontFamily:"'Lato',sans-serif",fontSize:".77rem",letterSpacing:".1em",textTransform:"uppercase",color:C.warm,margin:0}}>📤 Enlaces para Airbnb / Booking.com</p>
+                    <button className="btn-sm" onClick={loadIcalLinks} disabled={icalLinksLoading}>{icalLinksLoading?"Cargando…":(icalLinks?"↻ Actualizar":"Mostrar enlaces")}</button>
+                  </div>
+                  <p style={{fontFamily:"'Lato',sans-serif",fontSize:".74rem",color:C.taupe,marginBottom:".8rem"}}>Para que Airbnb y Booking vean las reservas hechas en esta web: copia el enlace de cada habitación y pégalo en ese anuncio (en Airbnb: Calendario → Disponibilidad → Conectar con otro sitio web → Importar calendario). Estos enlaces son privados; no los compartas.</p>
+                  {icalLinks&&!icalLinks.configured&&<p style={{fontFamily:"'Lato',sans-serif",fontSize:".78rem",color:"#b23b2e",margin:0}}>⚠️ Falta configurar ICAL_TOKEN en Vercel. Pídele a Justin que lo añada.</p>}
+                  {icalLinks&&icalLinks.configured&&<div style={{display:"flex",flexDirection:"column",gap:".45rem"}}>
+                    {icalLinks.rooms.map(l=>(
+                      <div key={l.room} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:".5rem",padding:".55rem .85rem",background:C.smoke,border:`1px solid ${C.sand}`,borderRadius:4,fontFamily:"'Lato',sans-serif",fontSize:".8rem"}}>
+                        <span style={{fontWeight:700,color:C.ebony}}>{l.label}</span>
+                        <button className="btn-sm" style={{flexShrink:0}} onClick={()=>copyText(l.url)}>Copiar enlace</button>
+                      </div>
+                    ))}
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:".5rem",padding:".55rem .85rem",border:`1px dashed ${C.sand}`,borderRadius:4,fontFamily:"'Lato',sans-serif",fontSize:".8rem"}}>
+                      <span style={{color:C.taupe}}>Todas las habitaciones (para Google Calendar)</span>
+                      <button className="btn-sm" style={{flexShrink:0}} onClick={()=>copyText(icalLinks.all)}>Copiar enlace</button>
+                    </div>
+                  </div>}
+                </div>
               </div>
 
               {/* ── Automated guest emails toggle ── */}

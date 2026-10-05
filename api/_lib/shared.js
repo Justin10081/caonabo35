@@ -36,8 +36,13 @@ export async function sendEmail(payload, options) {
 // receives nothing. Fail closed — a bad value costs the owners their backup email
 // (loud, fixable in a minute) instead of leaking a guest's details (silent, permanent).
 // Adding an internal recipient is a code change, on purpose.
+// 2026-10-05: the business has no mailbox of its own. The owner's address is the one
+// published as the hotel's contact email (settings.email), so it is the business address.
+// caonabo35@gmail.com was listed here, but the business does not own it: whoever holds
+// that inbox would have been an approved recipient of guest data, so it is gone.
+const OWNER_ADDRESS   = 'liu.luis@me.com';
 const OWNED_DOMAINS   = ['caonabo35.com'];
-const OWNED_ADDRESSES = ['caonabo35@gmail.com']; // owners' mailbox, predates the domain
+const OWNED_ADDRESSES = [OWNER_ADDRESS];
 const EMAIL_SHAPE     = /^[^\s@,;]+@[^\s@,;]+\.[a-z]{2,}$/i;
 
 function isOwnedAddress(addr) {
@@ -48,9 +53,12 @@ function isOwnedAddress(addr) {
 
 // Splits ADMIN_EMAIL into what we may send to and what we must not. `rejected` is
 // returned rather than dropped so a stranger in the config is noisy, not invisible.
+// Unset or blank means the owner, so backups and booking alerts keep reaching him without
+// anyone having to remember a Vercel setting. A wrong value is still refused, not replaced.
 export function adminRecipients(raw = process.env.ADMIN_EMAIL) {
   const allowed = [], rejected = [];
-  for (const a of String(raw || '').split(/[,;\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean)) {
+  const value = String(raw || '').trim() || OWNER_ADDRESS;
+  for (const a of value.split(/[,;\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean)) {
     (isOwnedAddress(a) ? allowed : rejected).push(a);
   }
   return { allowed: [...new Set(allowed)], rejected: [...new Set(rejected)] };

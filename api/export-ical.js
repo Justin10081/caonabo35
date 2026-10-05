@@ -1,6 +1,7 @@
 import { serviceClient, safeEqual, bearerToken, isAdminToken, roomShortLabel } from './_lib/shared.js';
 
 const CRLF = '\r\n';
+const SITE_URL = 'https://caonabo35.com';
 
 function toICalDate(dateStr) {
   return String(dateStr).slice(0, 10).replace(/-/g, '');
@@ -70,8 +71,29 @@ export default async function handler(req, res) {
   // Airbnb/Booking/Google, and the cron secret also unlocks backups); the admin panel uses its session.
   const token = typeof req.query?.token === 'string' ? req.query.token : '';
   const tokenOk = !!token && safeEqual(token, process.env.ICAL_TOKEN);
-  if (!tokenOk && !(await isAdminToken(supabase, bearerToken(req)))) {
+  const isAdmin = !tokenOk && (await isAdminToken(supabase, bearerToken(req)));
+  if (!tokenOk && !isAdmin) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // ?links=1 (admin session only): the subscription URLs the owner pastes into Airbnb /
+  // Booking.com, so the token never has to be passed around by hand.
+  if (req.query?.links === '1') {
+    if (!isAdmin) return res.status(401).json({ error: 'Unauthorized' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    const icalToken = process.env.ICAL_TOKEN || '';
+    if (!icalToken) return res.status(200).json({ configured: false, all: null, rooms: [] });
+    const { data: rooms, error: roomErr } = await supabase.from('rooms').select('id,name');
+    if (roomErr) {
+      console.error('export-ical links error:', roomErr.message);
+      return res.status(500).json({ error: 'Export failed' });
+    }
+    const base = `${SITE_URL}/api/export-ical?token=${encodeURIComponent(icalToken)}`;
+    const list = (rooms || [])
+      .filter(r => /^[1-9]$/.test(String(r.id)))
+      .sort((a, b) => Number(a.id) - Number(b.id))
+      .map(r => ({ room: Number(r.id), label: roomShortLabel(r, r.id), url: `${base}&room=${r.id}` }));
+    return res.status(200).json({ configured: true, all: base, rooms: list });
   }
 
   const roomParam = req.query?.room;
